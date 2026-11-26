@@ -1,0 +1,775 @@
+ROBOT PLATFORM / SMART SWARM — SHARED CONTRACT 1.0.0
+Prepared 25 November 2026. This is a proposed interface to implement, not an API that already exists.
+
+PURPOSE AND OWNERSHIP
+
+Chat A owns the robot-platform project: host discovery, existing-service adapters, Mac launcher, control ownership, input routing, generic acquisition, recording and export adapters, health and compatibility checks.
+Chat B owns the smart-swarm project: research scenarios, MuJoCo task assembly, private agent observations, evidence learning, collective memory, communication, experiment-specific dataset manifests, model recipes, evaluation and reports.
+
+Dependencies point from smart-swarm to robot-platform through this contract. Neither project imports the other's application entry point. Existing Explorer, SO101 Studio and CubeBot services remain native backends. The selected runtime and source revision are explicit. A local HTTP client, a recorded-stream client and an in-process simulation client expose equivalent typed operations; they do not need identical transport implementations.
+
+Chat A is the canonical owner of machine-readable schemas and golden protocol fixtures. Chat B may implement a small compatible client/mock immediately from this specification. Keep the normative text identical in both project handovers. Identify this version as robot-platform/1.0.0; record the SHA-256 of this exact contract file. Additive optional fields may be negotiated. Breaking changes require a new major protocol version and an adapter, not silent drift. No large shared SDK or plugin framework is required.
+
+RUN MODES
+
+Every run declares one of hardware, mujoco, replay or fixture. Fixtures are software test data, not simulation evidence. A simulation must actually step MuJoCo and render the declared views. Replaying a real episode does not create another independent physical trial. All outputs keep original provenance and source episode identities.
+
+A host can be offline while simulated and replay workflows remain usable. Capability states are available, unavailable, degraded or unverified, with a reason and last observation time. A missing sensor never becomes an invented zero-valued measurement.
+
+IDENTIFIERS AND ACTION SCHEMAS
+
+Use stable agent_id, device_id, host_id, sensor_id, session_id, episode_id, world_episode_id, scene_group_id, action_schema_id and calibration_revision. A SO101 leader is an input device, not an additional autonomous robot.
+
+Each action schema lists ordered names, units, coordinate frame, absolute/relative semantics, limits and control period. Preserve native conventions at the adapter boundary. SO101 joints in degrees and calibrated gripper percentage are not silently converted to radians or copied into ROSMASTER joints. ROSMASTER base, stationary arm and combined manual control are distinct modes. Tank base commands are distinct from measured odometry. A proposed normalized training representation must carry an explicit reversible transform and hash.
+
+ActuatorCommand contains protocol_version, session_id, lease_epoch, command_id, agent_id, action_schema_id, monotonically increasing sequence, action_values, source_sample_ids, issued_time with clock identity, max_age_ms, receiver_ttl_ms, freshness_token and intent. Command freshness is checked against original issue time using a validated clock mapping/uncertainty or an equivalent receiver-issued deadline token tied to the active lease. Reject motion if its maximum plausible age cannot be bounded within the limit. Receipt, retry, forwarding and reconnect never renew an expired intent. A receiver-local queue TTL is an additional safeguard, not a substitute for end-to-end freshness. An exact duplicate command_id with the same semantic payload returns the cached command result without resending motion or refreshing expiry; the response envelope echoes the current request_id. Reuse of command_id with a different payload is rejected as COMMAND_ID_CONFLICT. Reject old sequences/epochs and clear queues across reconnects. Intent describes requested movement; it does not assert physical success.
+
+AppliedCommand separately records requested values, adapter-clipped values, native accepted/applied values, send interval, rejection reason, hardware acknowledgment availability and measured response if available. Unknown native values are null with a reason/provenance; do not fill them with requested values. Distinguish accepted, dispatched, rejected and outcome_unknown lifecycle states without blocking the control loop for delayed measurements. A successful socket write is not a motor acknowledgment. A gripper command is not a hidden-object label.
+
+OBSERVATIONS AND CLOCKS
+
+ObservationPacket contains protocol_version, run_mode, world_episode_id, episode_id, agent_id, sample_id, sequence, source_time, receive_time, optional UTC estimate, clock_mapping_id, clock_uncertainty_ms, sensor records, measured_state, state_units, validity and applied_command_ref. Every timestamp has a clock_id identifying host, boot/epoch and clock kind. Source and receiver identities are distinct. receive_time means platform acquisition receipt unless another named receipt stage is explicitly included. Camera exposure/read times retain their own clock domains. Clock mappings identify both endpoints, validity interval and uncertainty. Encode 64-bit nanoseconds as decimal strings on the JSON wire to avoid JavaScript precision loss; do not compare timestamps from different clocks without a valid mapping.
+
+Every camera has its own frame_id, sensor_id, exposure timestamp if available, otherwise a documented capture/read interval, resolution, encoding, frame reference/hash, intrinsics/extrinsics revision if known, frame age, dropped/repeated counters and access role. Keep all configured cameras; do not silently reduce a two-camera recording to one image feature. Depth, lidar and IMU are optional advertised channels with units and timestamps; missing channels remain unavailable.
+
+Access roles are agent_input, training_label_only or evaluator_only. An evaluator overhead camera, terminal reveal, simulator object identity and hidden coordinates cannot appear in agent_input. A host-wide recorder may retain all channels, but a Smart Swarm agent receives only its allowlisted local views and delivered messages. An operator dashboard can show all views only if its global state is not returned to the agent runtime.
+
+Preserve local monotonic times and estimate inter-host offsets with an uncertainty bound. Record mapping changes and reboot epochs. Cross-host causal order is trusted only when supported by uncertainty intervals, explicit message links or observed event order. Do not promise hardware synchronization merely because timestamps use nanoseconds. Excess timing uncertainty invalidates an affected causal comparison or marks its ordering unknown; it never silently creates an ordering.
+
+DEVICE OWNERSHIP
+
+One physical actuator/input device has one effective writer across projects. Preview may share an existing camera service; it must not open a second exclusive camera/serial handle. Resource grants include the leader input device when it drives a follower or ROSMASTER. Sessions have a lease epoch and receiver-side expiry.
+
+Opening a menu, starting a service, acquiring a session, reconnecting, loading a checkpoint or finishing a training job cannot arm or move physical hardware. States are DISCONNECTED, OBSERVE, DISARMED, ARMED, STOPPED and FAULT. A hardware session needs an explicit operator action to enter ARMED after preflight. Creating a platform session is a disarmed logical reservation: do not blindly proxy it to a legacy /session, enable, teleoperate or recorder-start call that configures/arms hardware. Map native acquire/configure/torque/enable calls explicitly and defer actuation-enabling calls to the hardware arm transition.
+
+MuJoCo and fixture clients may activate simulated actuators programmatically. Replay cannot activate physical actuators. Run mode is fixed at session creation and cannot be upgraded to hardware. Preserve robot-side watchdogs, limits, STOP and fault latches. Keyboard/gamepad focus handling, native leader-stream freshness, policy cancellation and recorder lifetime are separate profiles. Preserve verified backend-specific behavior; merely opening/closing a collection dashboard must not take over a leader or stop another operator. Recording can remain alive and mark a control interruption.
+
+For mobile bases STOP means a timely neutral velocity command. Arm stop/hold/torque behavior follows the verified existing driver and physical setup; do not substitute torque-off or a rapid move to home. A software STOP acknowledgment records delivery and measured response availability; it is not certification of a physical emergency stop.
+
+A new launcher lock is insufficient if old controllers bypass it. The backend adapter must enforce exclusivity at the native hardware boundary, or explicitly coordinate a reversible handover that disables the competing writer. Detect and refuse ambiguous ownership. Preserve running data collection/training and native factory services. Never stop all similarly named services to obtain control.
+
+MINIMUM LOCAL API
+
+Use the existing FastAPI/HTTP/WebSocket stack where practical. These paths are new platform paths, not claims about legacy endpoints:
+
+- GET /v1/health: version, process readiness and backend health; readiness does not imply armed hardware.
+- GET /v1/capabilities: agents, sensors, controls, action schemas, recorder features, ownership enforcement status and supported run modes.
+- POST /v1/sessions: request resources and observe/teleoperate/policy mode; returns a session and lease information, initially disarmed.
+- POST /v1/sessions/{id}/heartbeat: renew a live lease without restoring an expired lease or arming.
+- POST /v1/sessions/{id}/arm: hardware requires explicit operator-originated intent after preflight; automated jobs cannot fabricate it. Simulated activation is programmatic and remains isolated from hardware.
+- POST /v1/sessions/{id}/commands: validated ActuatorCommand; acknowledgment is AppliedCommand, not task success.
+- POST /v1/stop: stop selected resources through their verified native behavior; available during recording and policy execution.
+- DELETE /v1/sessions/{id}: neutralize/hold only resources still owned by this session's current lease epoch, release its resources and record the transition. Deleting an expired/superseded/observe-only session must not stop a different owner. Resource-wide STOP is a separate authorized operation.
+- WS /v1/stream: scoped observations and lifecycle events with sequence/cursor information, bounded buffering and explicit gaps.
+- POST /v1/episodes: begin a declared recording with cameras, source type, task, lineage and output destination.
+- POST /v1/episodes/{id}/finalize: close and validate atomically; return manifest and validation report, or a recoverable/quarantined state.
+- GET /v1/episodes/{id}: read metadata, channel references and validation status without opening hardware.
+- POST /v1/episodes/{id}/abort: idempotently stop this recording and preserve/quarantine incomplete data with a reason; this is not a robot-wide STOP.
+- POST /v1/executions: run an allowlisted skill or complete checkpoint manifest through the existing host-side worker under a compatible session/lease; return execution_id.
+- GET /v1/executions/{id}: read lifecycle and measured execution status; worker completion is not task success.
+- POST /v1/executions/{id}/cancel: cancel that execution with its verified stop/hold behavior, scoped to its still-current ownership.
+- POST /v1/compute/reservations: acquire the effective existing host compute/GPU lease with declared budget and protected recording/inference checks; return reservation_id or RESOURCE_BUSY.
+- POST /v1/compute/reservations/{id}/heartbeat: renew only the current compute reservation; expired grants are reacquired explicitly.
+- DELETE /v1/compute/reservations/{id}: release only the caller's reservation. Use expiry/heartbeat handling to recover failed workers without interrupting another active job.
+
+ExecutionRequest identifies session/epoch, agent, run mode, skill or full checkpoint manifest/hash, action schema, ordered authorized camera IDs, target-conditioning payload, executor profile and timeout/step limits. Validate it before launch. The device/compute host retains the native motor loop; B does not stream every policy joint target through the Mac. Physical execution requires an already armed hardware session. Outcome observation is separate from worker completion.
+
+Compute reservation is a thin adapter to the installed effective GPU/job/physical-activity lease, not a new scheduler or competing lock namespace. Publish its verified descriptor in A's early handover. B uses that same boundary before GPU allocation. Until available, B may use an explicitly idle standalone compute environment or CPU profile; it must not start a second heavy job against an unknown active recording/inference workload.
+
+Use structured errors with code, message, retryable and details. At minimum distinguish OFFLINE, RESOURCE_BUSY, LEASE_EXPIRED, NOT_ARMED, STALE_COMMAND, COMMAND_ID_CONFLICT, STALE_OBSERVATION, INVALID_ACTION_SCHEMA, CALIBRATION_MISMATCH, STORAGE_LIMIT and INVALID_EPISODE. Do not return a success boolean for an action that was never sent.
+
+The interface remains local or on the existing trusted network/tunnel. Reuse authentication without writing secrets to repositories, artifacts or command logs. Service requests use an allowlist; there is no arbitrary remote shell endpoint. Performance must be measured against the native control rate and existing watchdog limits; transport cannot silently slow a working control loop.
+
+EPISODE STORAGE AND EXPORT
+
+Use an atomic episode manifest and append-only event/frame sidecars. Reuse existing durable raw storage or LeRobot export, without rewriting existing recordings. The manifest includes source repository/commit/local diff identity, runtime versions, robot/calibration/action/model hashes, dataset lineage, independent episode/group IDs, control profile, camera inventory, collection protocol and operator intervention annotations.
+
+Keep requested actions, applied actions and measured states distinct. A world_episode_id identifies one complete research story; it references one or more device/agent episode_id recordings. A's generic recorder manages those streams, while B supplies the story grouping, required/optional channel declarations, visibility scopes and query/reveal boundaries. Recording ownership is separate from actuator ownership; capture alone never arms a robot. Create its observe-mode session through /v1/sessions with declared camera/sensor resources and granted recorder access. A recorder may persist evaluator streams, but agent subscriptions remain restricted. POST /v1/episodes returns recording_id as the handle used by its finalize/abort/GET routes; individual episode_id values are referenced inside that recording manifest. Begin/finalize/abort use request IDs and are idempotent. A failed insertion can be a complete valid story; missing required camera data or an interrupted writer is a recording-integrity failure, not the same outcome status.
+
+Preserve incomplete attempts in quarantine with recoverable metadata. An interrupted recording is not silently accepted as a complete demonstration. Frame windows, alternate camera crops, mirrored observations and different message-budget evaluations retain their parent world_episode_id. Retain every declared raw camera. A derived motor dataset exports only its explicitly allowlisted agent-input cameras as observation features; evaluator/label-only streams remain restricted. The two-camera export test uses two authorized input cameras and separately checks privileged-stream exclusion.
+
+The experiment adds agent-private observations, local evidence, sent/delivered messages, decisions, inspection results and final reveals in separate namespaces. Reveal records include target_state_time_or_interval: a reveal can label the earlier scored state only if intervening actions preserved the relevant contents/relations. Active inspection/retrieval uses separate pre/post-action truth records. Put privileged truth under an explicitly restricted evaluator/training-label namespace. Keep original world history and train/validation/test membership immutable. Export motor datasets by embodiment and action schema using the verified installed LeRobot API; preserve all authorized cameras, tasks and normalization metadata.
+
+EXPERIMENT LAUNCH DESCRIPTOR
+
+Smart Swarm provides a small experiment.json with protocol_version, experiment_id=smart-swarm, display_name, project_path, entrypoint argv, supported run modes, health/status location and data root. The platform registers a fixed menu entry using this descriptor. It displays states such as ready_to_record, collecting, ready_to_train, training, evaluating, blocked and complete. The descriptor is a local trusted configuration file, not an arbitrary network command request. Smart Swarm owns its training jobs and research state; the platform can show their status and invoke declared commands.
+
+MINIMUM CONTRACT FIXTURES AND ACCEPTANCE
+
+Provide a small valid episode with two authorized policy camera streams and a separate evaluator-only stream, distinct requested/applied/measured values including explicit unknowns, clock uncertainty, an interrupted session and recovery, a rejected stale command, and evaluator-only truth. Both projects read the same fixture and reject the same invalid examples. This fixture proves compatibility, not robot learning.
+
+Test: no motion on launch/reconnect/logical reservation; competing writer denied at the effective boundary; correct gripper/unit transforms; delayed first arrivals and obsolete sequences/epochs rejected; exact duplicate command_id returns its cached result without redispatch or renewed lifetime; the same command_id with a changed payload is rejected; stale session deletion cannot stop a new owner; disconnect preserves the correct input-profile behavior; frame/message gaps visible; source groups preserved through export; privileged fields inaccessible to agent clients; replay cannot acquire a physical control session. Confirm equivalence of A's real service client and B's mock for these behaviors.
+
+Handover files include contract version/hash, capabilities snapshot, endpoint/action schema examples, fixture hashes, source revisions, active limitations and exact commands tested. A owns contract updates; B records compatibility or a precise failing case. Neither waits for the other to build its independent work.
+
+WIRE RULES AND HANDOVER DISCOVERY
+
+All JSON uses UTF-8, finite numeric values, stable string IDs and decimal-string nanoseconds. Ordered action/state arrays refer to a declared immutable schema. Resource IDs use host_id/device_id/kind; IDs contain no secrets. Unknown measurements use null plus a validity/reason field. Successful HTTP replies use {protocol_version, request_id, data, error:null}; failures use data:null and the structured error. Request IDs provide idempotency for begin/finalize/abort/execute operations, and command_id additionally prevents replayed movement. GET/DELETE may carry request_id in the X-Request-ID header; JSON POST bodies include it.
+
+Stream subscription names session_id, agent_ids, channels, after_sequence and access_scope. The server intersects requested scope with granted permissions; asking for evaluator scope does not grant it. Send typed messages with a stream sequence, explicit gap notifications and the same ObservationPacket schema. Control/recording subscriptions have bounded queues; dropping a visual frame is recorded rather than blocking the motor watchdog.
+
+Use a configurable handover directory, defaulting to the sibling robot-platform/handover directory from smart-swarm. A writes contract, schemas, golden fixtures, capabilities, source revisions and the compute reservation descriptor there. B writes its own handover directory with experiment.json and compatibility results; A reads that configured location. If workspaces differ, exchange these small artifacts. Never assume chats share an in-memory registry.
+
+The appended wire examples are normative field/shape examples for this version. Their IDs and local paths are simulated illustrative values, not actual hardware addresses or a runnable dataset. A converts the specification/examples into JSON schemas and creates real golden fixture files; B can validate envelopes immediately. Additive optional metadata is allowed without changing existing required meanings. Both prompt copies carry identical examples and the same contract checksum.
+
+
+NORMATIVE WIRE EXAMPLES (same content as 06_WIRE_EXAMPLES_V1.json)
+
+{
+  "protocol_version": "robot-platform/1.0.0",
+  "purpose": "Normative wire shapes; illustrative simulation-only values; no image/checkpoint files supplied.",
+  "identifier_rules": {
+    "resource_id": "host_id/device_id/kind",
+    "nanoseconds": "decimal string"
+  },
+  "cases": [
+    {
+      "name": "capabilities",
+      "method": "GET",
+      "path": "/v1/capabilities",
+      "request": null,
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-01",
+        "data": {
+          "run_modes": [
+            "mujoco",
+            "replay",
+            "fixture"
+          ],
+          "ownership_enforcement": "simulated",
+          "agents": [
+            {
+              "agent_id": "so101-1",
+              "embodiment": "so101",
+              "status": "available",
+              "resource_ids": [
+                "sim-host/so101-1/actuator"
+              ],
+              "action_schema_ids": [
+                "so101-six-joint-example-v1"
+              ],
+              "camera_ids": [
+                "so101-1/wrist",
+                "so101-1/top"
+              ]
+            }
+          ],
+          "action_schemas": [
+            {
+              "action_schema_id": "so101-six-joint-example-v1",
+              "names": [
+                "shoulder_pan",
+                "shoulder_lift",
+                "elbow_flex",
+                "wrist_flex",
+                "wrist_roll",
+                "gripper"
+              ],
+              "units": [
+                "deg",
+                "deg",
+                "deg",
+                "deg",
+                "deg",
+                "calibrated_percent"
+              ],
+              "semantics": "absolute_position",
+              "frame": "native_calibrated_joints",
+              "control_period_ms": 33.333,
+              "limits_source": "illustrative_fixture_profile"
+            }
+          ],
+          "recorder": {
+            "multi_camera": true,
+            "world_grouping": true,
+            "abort_to_quarantine": true
+          },
+          "cameras": [
+            {
+              "sensor_id": "so101-1/wrist",
+              "resource_id": "sim-host/so101-wrist/camera",
+              "access_role": "agent_input"
+            },
+            {
+              "sensor_id": "so101-1/top",
+              "resource_id": "sim-host/so101-top/camera",
+              "access_role": "agent_input"
+            },
+            {
+              "sensor_id": "evaluator/overhead",
+              "resource_id": "sim-host/evaluator-overhead/camera",
+              "access_role": "evaluator_only"
+            }
+          ]
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "reserve_session",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-02",
+        "run_mode": "mujoco",
+        "mode": "policy",
+        "resource_ids": [
+          "sim-host/so101-1/actuator"
+        ],
+        "requested_ttl_ms": 1000
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-02",
+        "data": {
+          "session_id": "session-demo-1",
+          "run_mode": "mujoco",
+          "mode": "policy",
+          "state": "DISARMED",
+          "lease_epoch": 1,
+          "resource_ids": [
+            "sim-host/so101-1/actuator"
+          ],
+          "receiver_clock": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "lease_deadline_ns": "2000000000",
+          "freshness_token": "sim-token-1"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "activate_simulation",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/arm",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-03",
+        "lease_epoch": 1,
+        "run_mode": "mujoco",
+        "preflight_id": "sim-preflight-1",
+        "operator_intent_id": null
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-03",
+        "data": {
+          "session_id": "session-demo-1",
+          "lease_epoch": 1,
+          "state": "ARMED",
+          "run_mode": "mujoco"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "command_and_acknowledgment",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/commands",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-04",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "command_id": "command-demo-1",
+        "agent_id": "so101-1",
+        "action_schema_id": "so101-six-joint-example-v1",
+        "sequence": 1,
+        "action_values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          50
+        ],
+        "source_sample_ids": [
+          "sample-demo-1"
+        ],
+        "issued_time": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "1000000000"
+        },
+        "max_age_ms": 100,
+        "receiver_ttl_ms": 50,
+        "freshness_token": "sim-token-1",
+        "intent": "fixture_absolute_joint_target"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-04",
+        "data": {
+          "command_id": "command-demo-1",
+          "status": "dispatched",
+          "requested_values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            50
+          ],
+          "adapter_values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            50
+          ],
+          "native_applied_values": null,
+          "native_applied_valid": false,
+          "native_applied_reason": "backend_does_not_report_application",
+          "dispatch_interval": {
+            "clock_id": {
+              "host_id": "sim-host",
+              "boot_id": "sim-boot-1",
+              "kind": "monotonic"
+            },
+            "start_ns": "1010000000",
+            "end_ns": "1011000000"
+          },
+          "hardware_acknowledgment": null,
+          "measured_response_ref": null,
+          "task_outcome": "unknown"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "stream_subscription",
+      "method": "WS",
+      "path": "/v1/stream",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-05",
+        "type": "subscribe",
+        "session_id": "session-demo-1",
+        "agent_ids": [
+          "so101-1"
+        ],
+        "channels": [
+          "observation",
+          "lifecycle"
+        ],
+        "after_sequence": 0,
+        "access_scope": "agent_input"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-05",
+        "data": {
+          "type": "subscribed",
+          "subscription_id": "subscription-demo-1",
+          "granted_agent_ids": [
+            "so101-1"
+          ],
+          "granted_access_scope": "agent_input",
+          "next_sequence": 1
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "observation_message",
+      "method": "WS_MESSAGE",
+      "path": "/v1/stream",
+      "request": null,
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-06",
+        "data": {
+          "type": "observation",
+          "stream_sequence": 1,
+          "packet": {
+            "protocol_version": "robot-platform/1.0.0",
+            "run_mode": "mujoco",
+            "world_episode_id": "world-demo-1",
+            "episode_id": "episode-demo-so101",
+            "agent_id": "so101-1",
+            "sample_id": "sample-demo-1",
+            "sequence": 1,
+            "source_time": {
+              "clock_id": {
+                "host_id": "sim-host",
+                "boot_id": "sim-boot-1",
+                "kind": "monotonic"
+              },
+              "monotonic_ns": "990000000"
+            },
+            "receive_time": {
+              "clock_id": {
+                "host_id": "sim-host",
+                "boot_id": "sim-boot-1",
+                "kind": "monotonic"
+              },
+              "monotonic_ns": "995000000"
+            },
+            "clock_mapping_id": "identity-sim-clock",
+            "clock_uncertainty_ms": 0,
+            "cameras": [
+              {
+                "sensor_id": "so101-1/wrist",
+                "frame_id": "frame-wrist-1",
+                "frame_ref": "fixture://world-demo-1/wrist/frame-1",
+                "sha256": null,
+                "hash_valid": false,
+                "hash_reason": "wire_example_has_no_image_file",
+                "capture_interval": {
+                  "clock_id": {
+                    "host_id": "sim-host",
+                    "boot_id": "sim-boot-1",
+                    "kind": "monotonic"
+                  },
+                  "start_ns": "988000000",
+                  "end_ns": "990000000"
+                },
+                "exposure_time": null,
+                "width": 640,
+                "height": 480,
+                "encoding": "rgb8",
+                "access_role": "agent_input",
+                "dropped_since_previous": 0,
+                "repeated": false
+              }
+            ],
+            "measured_state": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              49
+            ],
+            "state_units": [
+              "deg",
+              "deg",
+              "deg",
+              "deg",
+              "deg",
+              "calibrated_percent"
+            ],
+            "validity": {
+              "state_measured": true,
+              "camera_timestamp_is_exposure": false
+            },
+            "applied_command_ref": null
+          }
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "reserve_recording_session",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-record-session",
+        "run_mode": "mujoco",
+        "mode": "observe",
+        "resource_ids": [
+          "sim-host/so101-wrist/camera",
+          "sim-host/so101-top/camera",
+          "sim-host/evaluator-overhead/camera"
+        ],
+        "requested_ttl_ms": 10000
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-record-session",
+        "data": {
+          "session_id": "session-record-demo-1",
+          "mode": "observe",
+          "run_mode": "mujoco",
+          "state": "OBSERVE",
+          "lease_epoch": 1,
+          "resource_ids": [
+            "sim-host/so101-wrist/camera",
+            "sim-host/so101-top/camera",
+            "sim-host/evaluator-overhead/camera"
+          ],
+          "access_profile": "trusted_recorder_all_declared_streams",
+          "can_control_actuators": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "begin_world_recording",
+      "method": "POST",
+      "path": "/v1/episodes",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-07",
+        "world_episode_id": "world-demo-1",
+        "run_mode": "mujoco",
+        "recording_session_id": "session-record-demo-1",
+        "scene_group_id": "source-group-demo-1",
+        "task_id": "insert-relocate-query",
+        "output_root_id": "smart-swarm-data",
+        "streams": [
+          {
+            "agent_id": "so101-1",
+            "sensor_id": "so101-1/wrist",
+            "required": true,
+            "access_role": "agent_input"
+          },
+          {
+            "agent_id": "so101-1",
+            "sensor_id": "so101-1/top",
+            "required": true,
+            "access_role": "agent_input"
+          },
+          {
+            "agent_id": "evaluator",
+            "sensor_id": "evaluator/overhead",
+            "required": false,
+            "access_role": "evaluator_only"
+          }
+        ],
+        "lineage": {
+          "source_world_ids": [],
+          "split": "development"
+        },
+        "research_boundaries": {
+          "query": null,
+          "reveal": null
+        }
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-07",
+        "data": {
+          "world_episode_id": "world-demo-1",
+          "recording_id": "recording-demo-1",
+          "status": "recording",
+          "episode_ids": [
+            "episode-demo-so101",
+            "episode-demo-evaluator"
+          ],
+          "actuator_state_changed": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "finalize_world_recording",
+      "method": "POST",
+      "path": "/v1/episodes/recording-demo-1/finalize",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-08",
+        "world_episode_id": "world-demo-1",
+        "query_boundary": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "10000000000"
+        },
+        "reveal_boundary": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "11000000000"
+        },
+        "target_state_time_or_interval": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "start_ns": "10000000000",
+          "end_ns": "11000000000"
+        },
+        "relations_preserved_until_reveal": true,
+        "task_outcome_label": "insertion_failed"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-08",
+        "data": {
+          "recording_id": "recording-demo-1",
+          "world_episode_id": "world-demo-1",
+          "recording_integrity": "complete",
+          "validation_status": "valid",
+          "task_outcome_label": "insertion_failed",
+          "manifest_ref": "fixture://world-demo-1/manifest.json",
+          "policy_training_eligibility": "requires_derived_dataset_selection"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "abort_recording",
+      "method": "POST",
+      "path": "/v1/episodes/recording-demo-2/abort",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-09",
+        "reason": "required_camera_lost",
+        "preserve": true
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-09",
+        "data": {
+          "recording_id": "recording-demo-2",
+          "recording_integrity": "incomplete",
+          "status": "quarantined",
+          "robot_wide_stop_sent": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "native_execution",
+      "method": "POST",
+      "path": "/v1/executions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-10",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "agent_id": "so101-1",
+        "run_mode": "mujoco",
+        "skill_id": "fixture-inspect",
+        "checkpoint_manifest": null,
+        "action_schema_id": "so101-six-joint-example-v1",
+        "camera_ids": [
+          "so101-1/wrist",
+          "so101-1/top"
+        ],
+        "target_conditioning": {
+          "kind": "visible_container_track",
+          "track_id": "local-track-2"
+        },
+        "executor_profile_id": "fixture-executor-v1",
+        "timeout_s": 30,
+        "max_steps": 900
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-10",
+        "data": {
+          "execution_id": "execution-demo-1",
+          "status": "accepted",
+          "task_outcome": "unknown"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "compute_reservation",
+      "method": "POST",
+      "path": "/v1/compute/reservations",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-11",
+        "host_id": "sim-host",
+        "job_id": "train-demo-1",
+        "device": "cpu",
+        "memory_limit_mb": 4096,
+        "requested_ttl_s": 600,
+        "protected_activities": [
+          "hardware_recording",
+          "hardware_inference"
+        ]
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-11",
+        "data": {
+          "reservation_id": "compute-demo-1",
+          "status": "granted",
+          "effective_lease_backend": "fixture-lease",
+          "heartbeat_path": "/v1/compute/reservations/compute-demo-1/heartbeat",
+          "heartbeat_interval_s": 30
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "delayed_command_rejection",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/commands",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-12",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "command_id": "command-too-old",
+        "agent_id": "so101-1",
+        "action_schema_id": "so101-six-joint-example-v1",
+        "sequence": 2,
+        "action_values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          50
+        ],
+        "source_sample_ids": [
+          "sample-demo-1"
+        ],
+        "issued_time": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "100000000"
+        },
+        "max_age_ms": 100,
+        "receiver_ttl_ms": 50,
+        "freshness_token": "sim-token-1",
+        "intent": "fixture_absolute_joint_target"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-12",
+        "data": null,
+        "error": {
+          "code": "STALE_COMMAND",
+          "message": "Original command age exceeds the permitted lifetime.",
+          "retryable": false,
+          "details": {
+            "age_upper_bound_ms": 900,
+            "max_age_ms": 100
+          }
+        }
+      }
+    }
+  ],
+  "experiment_descriptor": {
+    "protocol_version": "robot-platform/1.0.0",
+    "experiment_id": "smart-swarm",
+    "display_name": "Smart Swarm",
+    "project_path": "<configured-smart-swarm-project-root>",
+    "entrypoint": [
+      "smart-swarm",
+      "status"
+    ],
+    "supported_run_modes": [
+      "mujoco",
+      "replay",
+      "hardware"
+    ],
+    "status_location": "<configured-status-file-or-URL>",
+    "data_root": "<configured-smart-swarm-data-root>"
+  }
+}

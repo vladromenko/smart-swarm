@@ -1,0 +1,1 @@
+"""Smart Swarm research software."""

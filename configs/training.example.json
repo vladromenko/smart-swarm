@@ -1,0 +1,45 @@
+{
+  "runtime": "/path/to/lerobot-venv/bin/python",
+  "lerobot_version": "0.6.1",
+  "profiles": {
+    "act-pilot": {
+      "type": "act",
+      "steps": 8,
+      "batch_size": 2,
+      "wall_seconds": 180
+    },
+    "smolvla-pilot": {
+      "type": "smolvla",
+      "steps": 2,
+      "batch_size": 1,
+      "wall_seconds": 480
+    },
+    "act-pipeline": {
+      "type": "act",
+      "steps": 5000,
+      "batch_size": 2,
+      "wall_seconds": 7200
+    },
+    "smolvla-pipeline": {
+      "type": "smolvla",
+      "steps": 2000,
+      "batch_size": 1,
+      "wall_seconds": 7200
+    },
+    "act-five-fit": {
+      "type": "act",
+      "steps": 600,
+      "batch_size": 4,
+      "wall_seconds": 1450
+    }
+  },
+  "pipeline_count": {
+    "train": 80,
+    "validation": 20,
+    "test": 20
+  },
+  "weights": {
+    "smolvla": "/path/to/model-cache/smolvla",
+    "vision_language_backbone": "/path/to/model-cache/vision_language_backbone"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "frozen_weights": "/path/to/model-cache/resnet18-f37072fd.pth",
+  "training_step_cap_per_model": 120,
+  "combined_wall_cap_s": 1800,
+  "seed": 3,
+  "variants": {
+    "events_only": 0.0,
+    "events_plus_reveal": 0.35
+  },
+  "abstain_below": 0.75
+}

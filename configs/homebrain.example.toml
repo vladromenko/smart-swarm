@@ -1,0 +1,20 @@
+data_root = "./local-data"
+asset_root = "./local-assets"
+platform_project = "/path/to/robot-platform"
+platform_handover = "/path/to/robot-platform/handover"
+platform_python = "/path/to/platform-venv/bin/python"
+platform_fixture_port = 18175
+render_backend = "egl"
+mesa_egl_vendor = "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+mesa_egl_device_index = 0
+nvidia_egl_vendor = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+studio_project = "/path/to/so101-studio"
+studio_python = "/path/to/so101-venv/bin/python"
+studio_origin = "http://127.0.0.1:8020"
+# Optional local archive identifiers for the historical native checks.
+legacy_studio_dataset = "YOUR_DATASET_ID"
+studio_recovery_fixture = "data/YOUR_DATASET_ID/episodes/YOUR_EPISODE_ID"
+native_cpu_admission = true
+explorer_origin = "http://127.0.0.1:8030"
+explorer_project = "/path/to/explorer"
+explorer_python = "/path/to/explorer-venv/bin/python"

@@ -1,0 +1,18 @@
+{
+  "protocol_version": "robot-platform/1.0.0",
+  "experiment_id": "smart-swarm",
+  "display_name": "Smart Swarm / SO101 pilot",
+  "project_path": "/path/to/smart-swarm",
+  "entrypoint": [
+    "/path/to/smart-swarm/Smart_Swarm.command"
+  ],
+  "supported_run_modes": [
+    "mujoco",
+    "replay",
+    "fixture",
+    "hardware"
+  ],
+  "status_location": "/path/to/smart-swarm/local-data/so101-pilot-status.json",
+  "data_root": "/path/to/smart-swarm/local-data",
+  "contract_sha256": "f079a477abcb8448c5e520de945f9c1b63e29fe39951bd378c8314171e9fce02"
+}

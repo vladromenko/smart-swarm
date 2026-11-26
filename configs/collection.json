@@ -1,0 +1,25 @@
+{
+  "pilot-stories": {
+    "target_attempts": 24,
+    "estimated_attempt_minutes": 3,
+    "required_roles": ["manipulation witness", "relocation witness", "query agent"],
+    "starting_setup": ["One target cube", "Two open opaque bins with exterior cues", "Place bins in marked feasible stations", "Verify local and reveal views before recording"],
+    "families": {
+      "F1": "Place the cube in the selected bin, then relocate the bin while the second agent records its exterior.",
+      "F2": "Record an attempted placement where the cube visibly remains on the surface. Relocate the same candidate bin.",
+      "F3": "Record a successful placement and a later supervised removal or repacking witnessed by only one agent.",
+      "F4": "Use two similar bins. Record partial exterior views during a crossing or occlusion.",
+      "F5": "Place the small bin into one reachable larger bin. Record the rearrangement only if clearances have passed preflight.",
+      "F6": "Withhold the decisive acquisition window from all agents. Keep separate evaluator truth."
+    }
+  },
+  "motor-skills": {
+    "target_attempts": 12,
+    "estimated_attempt_minutes": 3,
+    "required_roles": ["SO101 operator", "recording quality check"],
+    "starting_setup": ["One target cube inside the verified reach envelope", "One open opaque bin with an unobstructed approach", "Raw wrist and local station RGB", "Verify ordered state and command targets"],
+    "families": {
+      "SO101-placement": "Demonstrate cube pickup, stable carry, placement, release and empty withdrawal at the validated station."
+    }
+  }
+}

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-swarm"
+version = "0.1.0"
+description = "Collective memory of hidden objects across private robot histories"
+requires-python = ">=3.11"
+dependencies = ["Pillow>=9", "numpy>=1.26"]
+
+[project.optional-dependencies]
+sim = ["mujoco==4.0.1", "scipy", "av"]
+test = ["pytest"]
+
+[project.scripts]
+smart-swarm = "smart_swarm.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

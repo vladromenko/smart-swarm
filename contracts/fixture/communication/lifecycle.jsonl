@@ -1,0 +1,4 @@
+{"lease_epoch": 1, "state": "DISARMED", "type": "reserved"}
+{"reason": "interrupted", "sequence_from": 2, "sequence_through": 3, "type": "gap"}
+{"lease_epoch": 1, "type": "lease_expired"}
+{"lease_epoch": 2, "state": "DISARMED", "type": "recovered"}

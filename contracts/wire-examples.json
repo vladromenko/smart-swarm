@@ -1,0 +1,658 @@
+{
+  "protocol_version": "robot-platform/1.0.0",
+  "purpose": "Normative wire shapes; illustrative simulation-only values; no image/checkpoint files supplied.",
+  "identifier_rules": {
+    "resource_id": "host_id/device_id/kind",
+    "nanoseconds": "decimal string"
+  },
+  "cases": [
+    {
+      "name": "capabilities",
+      "method": "GET",
+      "path": "/v1/capabilities",
+      "request": null,
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-01",
+        "data": {
+          "run_modes": [
+            "mujoco",
+            "replay",
+            "fixture"
+          ],
+          "ownership_enforcement": "simulated",
+          "agents": [
+            {
+              "agent_id": "so101-1",
+              "embodiment": "so101",
+              "status": "available",
+              "resource_ids": [
+                "sim-host/so101-1/actuator"
+              ],
+              "action_schema_ids": [
+                "so101-six-joint-example-v1"
+              ],
+              "camera_ids": [
+                "so101-1/wrist",
+                "so101-1/top"
+              ]
+            }
+          ],
+          "action_schemas": [
+            {
+              "action_schema_id": "so101-six-joint-example-v1",
+              "names": [
+                "shoulder_pan",
+                "shoulder_lift",
+                "elbow_flex",
+                "wrist_flex",
+                "wrist_roll",
+                "gripper"
+              ],
+              "units": [
+                "deg",
+                "deg",
+                "deg",
+                "deg",
+                "deg",
+                "calibrated_percent"
+              ],
+              "semantics": "absolute_position",
+              "frame": "native_calibrated_joints",
+              "control_period_ms": 33.333,
+              "limits_source": "illustrative_fixture_profile"
+            }
+          ],
+          "recorder": {
+            "multi_camera": true,
+            "world_grouping": true,
+            "abort_to_quarantine": true
+          },
+          "cameras": [
+            {
+              "sensor_id": "so101-1/wrist",
+              "resource_id": "sim-host/so101-wrist/camera",
+              "access_role": "agent_input"
+            },
+            {
+              "sensor_id": "so101-1/top",
+              "resource_id": "sim-host/so101-top/camera",
+              "access_role": "agent_input"
+            },
+            {
+              "sensor_id": "evaluator/overhead",
+              "resource_id": "sim-host/evaluator-overhead/camera",
+              "access_role": "evaluator_only"
+            }
+          ]
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "reserve_session",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-02",
+        "run_mode": "mujoco",
+        "mode": "policy",
+        "resource_ids": [
+          "sim-host/so101-1/actuator"
+        ],
+        "requested_ttl_ms": 1000
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-02",
+        "data": {
+          "session_id": "session-demo-1",
+          "run_mode": "mujoco",
+          "mode": "policy",
+          "state": "DISARMED",
+          "lease_epoch": 1,
+          "resource_ids": [
+            "sim-host/so101-1/actuator"
+          ],
+          "receiver_clock": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "lease_deadline_ns": "2000000000",
+          "freshness_token": "sim-token-1"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "activate_simulation",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/arm",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-03",
+        "lease_epoch": 1,
+        "run_mode": "mujoco",
+        "preflight_id": "sim-preflight-1",
+        "operator_intent_id": null
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-03",
+        "data": {
+          "session_id": "session-demo-1",
+          "lease_epoch": 1,
+          "state": "ARMED",
+          "run_mode": "mujoco"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "command_and_acknowledgment",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/commands",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-04",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "command_id": "command-demo-1",
+        "agent_id": "so101-1",
+        "action_schema_id": "so101-six-joint-example-v1",
+        "sequence": 1,
+        "action_values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          50
+        ],
+        "source_sample_ids": [
+          "sample-demo-1"
+        ],
+        "issued_time": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "1000000000"
+        },
+        "max_age_ms": 100,
+        "receiver_ttl_ms": 50,
+        "freshness_token": "sim-token-1",
+        "intent": "fixture_absolute_joint_target"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-04",
+        "data": {
+          "command_id": "command-demo-1",
+          "status": "dispatched",
+          "requested_values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            50
+          ],
+          "adapter_values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            50
+          ],
+          "native_applied_values": null,
+          "native_applied_valid": false,
+          "native_applied_reason": "backend_does_not_report_application",
+          "dispatch_interval": {
+            "clock_id": {
+              "host_id": "sim-host",
+              "boot_id": "sim-boot-1",
+              "kind": "monotonic"
+            },
+            "start_ns": "1010000000",
+            "end_ns": "1011000000"
+          },
+          "hardware_acknowledgment": null,
+          "measured_response_ref": null,
+          "task_outcome": "unknown"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "stream_subscription",
+      "method": "WS",
+      "path": "/v1/stream",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-05",
+        "type": "subscribe",
+        "session_id": "session-demo-1",
+        "agent_ids": [
+          "so101-1"
+        ],
+        "channels": [
+          "observation",
+          "lifecycle"
+        ],
+        "after_sequence": 0,
+        "access_scope": "agent_input"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-05",
+        "data": {
+          "type": "subscribed",
+          "subscription_id": "subscription-demo-1",
+          "granted_agent_ids": [
+            "so101-1"
+          ],
+          "granted_access_scope": "agent_input",
+          "next_sequence": 1
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "observation_message",
+      "method": "WS_MESSAGE",
+      "path": "/v1/stream",
+      "request": null,
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-06",
+        "data": {
+          "type": "observation",
+          "stream_sequence": 1,
+          "packet": {
+            "protocol_version": "robot-platform/1.0.0",
+            "run_mode": "mujoco",
+            "world_episode_id": "world-demo-1",
+            "episode_id": "episode-demo-so101",
+            "agent_id": "so101-1",
+            "sample_id": "sample-demo-1",
+            "sequence": 1,
+            "source_time": {
+              "clock_id": {
+                "host_id": "sim-host",
+                "boot_id": "sim-boot-1",
+                "kind": "monotonic"
+              },
+              "monotonic_ns": "990000000"
+            },
+            "receive_time": {
+              "clock_id": {
+                "host_id": "sim-host",
+                "boot_id": "sim-boot-1",
+                "kind": "monotonic"
+              },
+              "monotonic_ns": "995000000"
+            },
+            "clock_mapping_id": "identity-sim-clock",
+            "clock_uncertainty_ms": 0,
+            "cameras": [
+              {
+                "sensor_id": "so101-1/wrist",
+                "frame_id": "frame-wrist-1",
+                "frame_ref": "fixture://world-demo-1/wrist/frame-1",
+                "sha256": null,
+                "hash_valid": false,
+                "hash_reason": "wire_example_has_no_image_file",
+                "capture_interval": {
+                  "clock_id": {
+                    "host_id": "sim-host",
+                    "boot_id": "sim-boot-1",
+                    "kind": "monotonic"
+                  },
+                  "start_ns": "988000000",
+                  "end_ns": "990000000"
+                },
+                "exposure_time": null,
+                "width": 640,
+                "height": 480,
+                "encoding": "rgb8",
+                "access_role": "agent_input",
+                "dropped_since_previous": 0,
+                "repeated": false
+              }
+            ],
+            "measured_state": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              49
+            ],
+            "state_units": [
+              "deg",
+              "deg",
+              "deg",
+              "deg",
+              "deg",
+              "calibrated_percent"
+            ],
+            "validity": {
+              "state_measured": true,
+              "camera_timestamp_is_exposure": false
+            },
+            "applied_command_ref": null
+          }
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "reserve_recording_session",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-record-session",
+        "run_mode": "mujoco",
+        "mode": "observe",
+        "resource_ids": [
+          "sim-host/so101-wrist/camera",
+          "sim-host/so101-top/camera",
+          "sim-host/evaluator-overhead/camera"
+        ],
+        "requested_ttl_ms": 10000
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-record-session",
+        "data": {
+          "session_id": "session-record-demo-1",
+          "mode": "observe",
+          "run_mode": "mujoco",
+          "state": "OBSERVE",
+          "lease_epoch": 1,
+          "resource_ids": [
+            "sim-host/so101-wrist/camera",
+            "sim-host/so101-top/camera",
+            "sim-host/evaluator-overhead/camera"
+          ],
+          "access_profile": "trusted_recorder_all_declared_streams",
+          "can_control_actuators": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "begin_world_recording",
+      "method": "POST",
+      "path": "/v1/episodes",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-07",
+        "world_episode_id": "world-demo-1",
+        "run_mode": "mujoco",
+        "recording_session_id": "session-record-demo-1",
+        "scene_group_id": "source-group-demo-1",
+        "task_id": "insert-relocate-query",
+        "output_root_id": "smart-swarm-data",
+        "streams": [
+          {
+            "agent_id": "so101-1",
+            "sensor_id": "so101-1/wrist",
+            "required": true,
+            "access_role": "agent_input"
+          },
+          {
+            "agent_id": "so101-1",
+            "sensor_id": "so101-1/top",
+            "required": true,
+            "access_role": "agent_input"
+          },
+          {
+            "agent_id": "evaluator",
+            "sensor_id": "evaluator/overhead",
+            "required": false,
+            "access_role": "evaluator_only"
+          }
+        ],
+        "lineage": {
+          "source_world_ids": [],
+          "split": "development"
+        },
+        "research_boundaries": {
+          "query": null,
+          "reveal": null
+        }
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-07",
+        "data": {
+          "world_episode_id": "world-demo-1",
+          "recording_id": "recording-demo-1",
+          "status": "recording",
+          "episode_ids": [
+            "episode-demo-so101",
+            "episode-demo-evaluator"
+          ],
+          "actuator_state_changed": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "finalize_world_recording",
+      "method": "POST",
+      "path": "/v1/episodes/recording-demo-1/finalize",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-08",
+        "world_episode_id": "world-demo-1",
+        "query_boundary": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "10000000000"
+        },
+        "reveal_boundary": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "11000000000"
+        },
+        "target_state_time_or_interval": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "start_ns": "10000000000",
+          "end_ns": "11000000000"
+        },
+        "relations_preserved_until_reveal": true,
+        "task_outcome_label": "insertion_failed"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-08",
+        "data": {
+          "recording_id": "recording-demo-1",
+          "world_episode_id": "world-demo-1",
+          "recording_integrity": "complete",
+          "validation_status": "valid",
+          "task_outcome_label": "insertion_failed",
+          "manifest_ref": "fixture://world-demo-1/manifest.json",
+          "policy_training_eligibility": "requires_derived_dataset_selection"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "abort_recording",
+      "method": "POST",
+      "path": "/v1/episodes/recording-demo-2/abort",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-09",
+        "reason": "required_camera_lost",
+        "preserve": true
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-09",
+        "data": {
+          "recording_id": "recording-demo-2",
+          "recording_integrity": "incomplete",
+          "status": "quarantined",
+          "robot_wide_stop_sent": false
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "native_execution",
+      "method": "POST",
+      "path": "/v1/executions",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-10",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "agent_id": "so101-1",
+        "run_mode": "mujoco",
+        "skill_id": "fixture-inspect",
+        "checkpoint_manifest": null,
+        "action_schema_id": "so101-six-joint-example-v1",
+        "camera_ids": [
+          "so101-1/wrist",
+          "so101-1/top"
+        ],
+        "target_conditioning": {
+          "kind": "visible_container_track",
+          "track_id": "local-track-2"
+        },
+        "executor_profile_id": "fixture-executor-v1",
+        "timeout_s": 30,
+        "max_steps": 900
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-10",
+        "data": {
+          "execution_id": "execution-demo-1",
+          "status": "accepted",
+          "task_outcome": "unknown"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "compute_reservation",
+      "method": "POST",
+      "path": "/v1/compute/reservations",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-11",
+        "host_id": "sim-host",
+        "job_id": "train-demo-1",
+        "device": "cpu",
+        "memory_limit_mb": 4096,
+        "requested_ttl_s": 600,
+        "protected_activities": [
+          "hardware_recording",
+          "hardware_inference"
+        ]
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-11",
+        "data": {
+          "reservation_id": "compute-demo-1",
+          "status": "granted",
+          "effective_lease_backend": "fixture-lease",
+          "heartbeat_path": "/v1/compute/reservations/compute-demo-1/heartbeat",
+          "heartbeat_interval_s": 30
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "delayed_command_rejection",
+      "method": "POST",
+      "path": "/v1/sessions/session-demo-1/commands",
+      "request": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-12",
+        "session_id": "session-demo-1",
+        "lease_epoch": 1,
+        "command_id": "command-too-old",
+        "agent_id": "so101-1",
+        "action_schema_id": "so101-six-joint-example-v1",
+        "sequence": 2,
+        "action_values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          50
+        ],
+        "source_sample_ids": [
+          "sample-demo-1"
+        ],
+        "issued_time": {
+          "clock_id": {
+            "host_id": "sim-host",
+            "boot_id": "sim-boot-1",
+            "kind": "monotonic"
+          },
+          "monotonic_ns": "100000000"
+        },
+        "max_age_ms": 100,
+        "receiver_ttl_ms": 50,
+        "freshness_token": "sim-token-1",
+        "intent": "fixture_absolute_joint_target"
+      },
+      "response": {
+        "protocol_version": "robot-platform/1.0.0",
+        "request_id": "wire-example-12",
+        "data": null,
+        "error": {
+          "code": "STALE_COMMAND",
+          "message": "Original command age exceeds the permitted lifetime.",
+          "retryable": false,
+          "details": {
+            "age_upper_bound_ms": 900,
+            "max_age_ms": 100
+          }
+        }
+      }
+    }
+  ],
+  "experiment_descriptor": {
+    "protocol_version": "robot-platform/1.0.0",
+    "experiment_id": "smart-swarm",
+    "display_name": "Smart Swarm",
+    "project_path": "<configured-smart-swarm-project-root>",
+    "entrypoint": [
+      "smart-swarm",
+      "status"
+    ],
+    "supported_run_modes": [
+      "mujoco",
+      "replay",
+      "hardware"
+    ],
+    "status_location": "<configured-status-file-or-URL>",
+    "data_root": "<configured-smart-swarm-data-root>"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "title": "Smart Swarm / SO101 pilot",
+  "task_id": "smart-swarm-so101-cube-placement-v1",
+  "attempt_limit": 4,
+  "placement_instruction": "Pick up the cube, place it in the accessible box, release, and withdraw.",
+  "ordered_policy_cameras": ["so101-1/wrist", "so101-1/top"],
+  "split": "development",
+  "setup": ["Use one cube and one open bin at the calibrated SO101 station.", "Mark the cube start, bin footprint and neutral arm pose with tape inside the verified reach envelope.", "Confirm that wrist and top both show pickup and release. Keep hands and obstacles clear during motion."],
+  "preflight": ["Connect the existing calibrated leader and follower plus the wrist and top cameras. Verify that native inventory identifies all four devices.", "With the work area clear and motion stopped, read back the saved leader and follower calibration profiles using the native console. Keep both profiles if they match the devices and the existing verified calibration.", "Keep native STOP within reach. If calibration readback, camera identity, clocks or STOP status is uncertain, leave actuation disabled and resolve it using the existing Studio procedure."],
+  "demonstrate": ["Select the pilot dataset and the native two-camera recording mode. Use the native explicit control and recording buttons before moving.", "Approach the marked cube, grasp, carry it clear of the surface, then lower it into the bin.", "Release and withdraw to the marked neutral pose. Finish the attempt in Studio so the native recorder saves it. Keep the final scene until the outcome is checked."],
+  "reveal": ["From a safe view, verify that the cube is fully inside the bin, stationary and clear of the gripper.", "Enter placement_succeeded, placement_failed or unknown using l in the Smart Swarm launcher. Interrupted recordings retain the native incomplete reason."],
+  "reset": ["After motion and recording stop, restore the taped cube and bin poses.", "Confirm the approved neutral arm pose and restore both camera views.", "After the last attempt, release native teleoperation with STOP. Leave the Smart Swarm launcher open so it can validate and import the saved attempts automatically."]
+}
