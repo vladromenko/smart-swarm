@@ -4,11 +4,14 @@ from collections import Counter
 import math
 from pathlib import Path
 
+from .contract import read_ns
 from .episode import load, rows, sha
 from .evidence_comparison import ERROR_COST, INSPECTION_COST, decision_cost, grouped_mean, nll
 from .particle_memory import LOCATIONS
 from .physical_evidence_dataset import DECISION_FILE, publish
+from .physical_inspection_controls import control_case, inspection_controls
 from .physical_learned import HEADS, METHOD, PROFILE
+from .physical_witness_score import diagnose, summarize as summarize_witnesses
 
 RULE = "rgb_rule"
 METHODS = (RULE, *HEADS)
@@ -45,11 +48,16 @@ def saved_decision(record):
     return decision
 
 
+def recorded_forecast(record, decision):
+    replay = record.get("blind_offline_forecast")
+    return replay if replay is not None else decision.get("learned_evidence") or {"status": "historical_rule_only"}
+
+
 def scoring_case(record, decision):
     terminal = record["labels"]["terminal"]
     if record["split"] != "development" or (terminal is not None and terminal not in LOCATIONS):
         raise ValueError("The physical pilot comparison requires development stories and verified outcomes")
-    learned = decision.get("learned_evidence") or {"status": "historical_rule_only"}
+    learned = recorded_forecast(record, decision)
     forecasts = {RULE: checked_forecast(decision["query_all"], RULE_THRESHOLD)}
     if learned["status"] == "scored":
         receipt = learned["receipt"]
@@ -57,11 +65,32 @@ def scoring_case(record, decision):
             raise ValueError("Physical pilot forecasts must share the same frozen profile")
         forecasts.update({kind: checked_forecast(receipt["heads"][kind], receipt["heads"][kind]["threshold"])
                           for kind in HEADS})
-    reason = learned.get("reason")
-    return {**{key: record[key] for key in ("story_id", "scene_group_id", "family", "split")},
+    reason = record.get("blind_offline_forecast_error") or learned.get("reason")
+    online_failure = (decision.get("learned_evidence") or {}).get("online_attempt")
+    score = {**{key: record[key] for key in ("story_id", "scene_group_id", "family", "split")},
             "terminal": terminal, "learned_forecast_status": learned["status"],
+            "learned_forecast_mode": learned.get("mode", "online") if learned["status"] == "scored" else None,
             "condition_status": record.get("condition_audit", {}).get("status", "unverified"),
             "learned_forecast_reason": reason, "forecasts": forecasts}
+    if online_failure is not None:
+        score["online_admission_failure"] = online_failure["reason"]
+    candidate = control_case(record, score)
+    return {**score, "inspection_control_case": candidate} if candidate is not None else score
+
+
+def native_scoring_case(record):
+    decision = saved_decision(record)
+    result = scoring_case(record, decision)
+    if result["learned_forecast_status"] == "scored":
+        receipt = recorded_forecast(record, decision)["receipt"]
+        try:
+            manifest = load(Path(record["path"]) / "manifest.json")
+            query = read_ns(manifest["query_boundary"]["monotonic_ns"])
+            witness = diagnose(receipt, record["labels"], query)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            witness = {"status": "wire_unverified", "reason": str(error)}
+        result["witness_diagnostics"] = witness
+    return result
 
 
 def metrics(rows):
@@ -97,11 +126,12 @@ def matched_comparison(cases):
                                      for name in METHODS}}
 
 
-def score_current(config):
-    corpus = publish(config)
-    cases = [scoring_case(record, saved_decision(record)) for record in corpus["records"]]
+def score_corpus(corpus):
+    cases = [native_scoring_case(record) for record in corpus["records"]]
     labels = sum(row["terminal"] is not None for row in cases)
     comparison = matched_comparison(cases)
+    by_mode = {mode: matched_comparison([row for row in cases if row["learned_forecast_mode"] == mode])
+               for mode in ("online", "blind_offline")}
     if not cases:
         status = "no_admitted_histories"
     elif not labels:
@@ -111,8 +141,10 @@ def score_current(config):
     else:
         status = "scored_development"
     manifest = corpus["manifest"]
+    controls = {"inspection_controls": inspection_controls(cases, METHODS)} if any(
+        row.get("inspection_control_case") is not None for row in cases) else {}
     return {"schema": "smart-swarm-physical-evidence-development-score-v1", "status": status,
-            "scope": "descriptive physical development replay on saved pre-inspection forecasts",
+            "scope": "descriptive physical development scoring of online and blind offline forecasts",
             "uses_post_reveal_labels": True, "inference_recomputed": False, "thresholds_refit": False,
             "f6_scope": "inspection tally for physical withholding cards",
             "profile_sha256": sha(PROFILE), "corpus_manifest": manifest,
@@ -124,4 +156,9 @@ def score_current(config):
             "condition_status_counts": corpus["condition_status_counts"],
             "capture_exclusion_counts": corpus["exclusion_counts"],
             "decision_costs": {"wrong_answer": ERROR_COST, "inspection": INSPECTION_COST},
-            "matched_comparison": comparison, "cases": cases}
+            "matched_comparison": comparison, "matched_comparison_by_forecast_mode": by_mode, "cases": cases,
+            **summarize_witnesses(cases), **controls}
+
+
+def score_current(config):
+    return score_corpus(publish(config))

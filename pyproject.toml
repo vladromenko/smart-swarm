@@ -11,6 +11,7 @@ dependencies = ["Pillow>=9", "numpy>=1.26"]
 
 [project.optional-dependencies]
 sim = ["mujoco==4.0.1", "scipy", "av"]
+paper = ["matplotlib>=3.8"]
 test = ["pytest"]
 
 [project.scripts]

@@ -6,8 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from rehearse_native_event_annotations import ARCHIVE, exact_projection, project
-from rehearse_physical_story_recovery import native_fixture
+from rehearse_native_event_annotations import ARCHIVE, NATIVE_FIXTURE, exact_projection, project
 from smart_swarm.cli import settings
 from smart_swarm.contract import json_bytes
 from smart_swarm.episode import Replay, atomic, load
@@ -39,7 +38,7 @@ def hidden_phase(root, manifest, state, outcome):
 
 
 def rehearse(config, root):
-    source = native_fixture(config)
+    source = config["studio_project"] / NATIVE_FIXTURE
     proof = validate_story_episode(config, source, technical=True)
     if not proof["technical_only"]:
         raise ValueError("The original Studio source must remain a technical archive")

@@ -4,6 +4,8 @@ This is the released independent test cohort. The same 100 independent source gr
 
 Correct container counts the registered resolvable scenes and charges an inspection as a missed first choice. F6 inspect counts hidden variants, with two variants per source group. Answer and wrong rates, proper scores, decision cost and serialized bytes weight source groups equally within each team size. Raw RGB payload counts compressed frame bytes. Compact and broadcast rows count their declared messages.
 
+The eight-agent comparison of inspection and correct first answers counts each F6 pair once and uses the 68 separate resolving controls from F1, F2, F3 and F5. It includes the always-inspect reference. It illustrates how a predictor with fully coupled F6 outputs can still make an unsupported direct answer. [Inspection and resolving-control chart](../evidence/learning-pilot-v3/primary-test-inspection-controls.pdf)
+
 ### N = 3
 
 | Objective | Method | Correct container | F6 inspect | Answer % | Wrong % | NLL | Brier | Cost | Mean bytes |

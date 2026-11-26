@@ -12,11 +12,16 @@ from .motor_visual_profile import match_visual
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def offline():
-    return {**os.environ, "HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1",
-            "HF_HUB_DISABLE_TELEMETRY": "1", "WANDB_MODE": "disabled", "OMP_NUM_THREADS": "3",
-            "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "3", "TOKENIZERS_PARALLELISM": "false",
-            "CUDA_VISIBLE_DEVICES": "", "PYTHONDONTWRITEBYTECODE": "1"}
+def offline(*, device="cpu"):
+    if device not in ("cpu", "cuda"):
+        raise ValueError(f"Unknown policy device {device}")
+    env = {**os.environ, "HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1",
+           "HF_HUB_DISABLE_TELEMETRY": "1", "WANDB_MODE": "disabled", "OMP_NUM_THREADS": "3",
+           "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "3", "TOKENIZERS_PARALLELISM": "false",
+           "PYTHONDONTWRITEBYTECODE": "1"}
+    if device == "cpu":
+        env["CUDA_VISIBLE_DEVICES"] = ""
+    return env
 
 
 def export_motor(source, output, *, clocked=False):
@@ -29,22 +34,23 @@ def export_motor(source, output, *, clocked=False):
     return {"dataset": str(output), "source": str(source), "runtime": config["lerobot_version"]}
 
 
-def training_command(config, recipe, dataset, output):
+def training_command(config, recipe, dataset, output, *, device="cpu"):
     spec = config["profiles"][recipe]
     common = [config["runtime"], "-m", "lerobot.scripts.lerobot_train",
               "--dataset.repo_id=smart-swarm/train", f"--dataset.root={dataset / 'train'}",
-              "--dataset.use_imagenet_stats=false", "--wandb.enable=false", "--policy.device=cpu",
+              "--dataset.use_imagenet_stats=false", "--wandb.enable=false", f"--policy.device={device}",
               "--policy.push_to_hub=false", "--env_eval_freq=0", "--seed=3",
               "--num_workers=0", "--persistent_workers=false", "--log_freq=1",
               f"--steps={spec['steps']}", f"--batch_size={spec['batch_size']}",
               f"--save_freq={min(spec['steps'], spec.get('save_freq', 150 if recipe == 'act-five-fit' else 1000))}",
               f"--output_dir={output}"]
-    if spec["type"] == "act":
-        if spec.get("initial_checkpoint"):
-            return common + [f"--policy.path={spec['initial_checkpoint']}"]
-        return common + act_args(recipe)
-    cpu_trainer = [config["runtime"], str(ROOT / "scripts/train_cpu.py")]
-    return cpu_trainer + common[3:] + smol_args(config, pilot=recipe == "smolvla-pilot")
+    if spec["type"] == "smolvla" or device == "cuda":
+        common = [config["runtime"], str(ROOT / "scripts/train_cpu.py"), *common[3:]]
+    if spec["type"] == "smolvla":
+        return common + smol_args(config, pilot=recipe == "smolvla-pilot")
+    if spec.get("initial_checkpoint"):
+        return common + [f"--policy.path={spec['initial_checkpoint']}"]
+    return common + act_args(recipe)
 
 
 def act_args(recipe):
@@ -79,7 +85,7 @@ def smol_args(config, *, pilot):
     return kwargs
 
 
-def train(recipe, dataset, location, platform_config):
+def train(recipe, dataset, location, platform_config, *, device="cpu"):
     config = load(ROOT / "configs/training.json")
     if recipe not in config["profiles"]:
         raise ValueError(f"Unknown training recipe: {recipe}")
@@ -93,8 +99,9 @@ def train(recipe, dataset, location, platform_config):
     from .research_jobs import admitted
 
     root = location / f"{recipe}-{uuid.uuid4().hex[:12]}"
-    with admitted(platform_config, root.name) as (grant, heartbeat):
-        return run_motor(config, recipe, dataset, root, data, validation, grant, heartbeat)
+    archive_only = device == "cpu" and bool(platform_config.get("native_cpu_admission"))
+    with admitted(platform_config, root.name, device=device, archive_only=archive_only) as (grant, heartbeat):
+        return run_motor(config, recipe, dataset, root, data, validation, grant, heartbeat, device=device)
 
 
 def verified_shared_path():
@@ -106,21 +113,24 @@ def verified_shared_path():
         raise ValueError("Shared path must pass the teacher and ACT trace checks before SmolVLA optimization")
 
 
-def run_motor(config, recipe, dataset, root, data, validation, grant, heartbeat):
+def run_motor(config, recipe, dataset, root, data, validation, grant, heartbeat, *, device="cpu"):
+    from .research_jobs import verify_compute_scope
+
+    verify_compute_scope(device, grant)
     visual = match_visual(data, validation)
     input_profile = data.get("input_profile", "historical-rgb")
     if validation.get("input_profile", "historical-rgb") != input_profile:
         raise ValueError("Motor train and validation input conditioning must agree")
     root.mkdir(exist_ok=False, parents=True)
     spec = config["profiles"][recipe]
-    args = training_command(config, recipe, dataset, root / "training")
-    record = {"recipe": recipe, "status": "training", "run_mode": "mujoco", "device": "cpu",
+    args = training_command(config, recipe, dataset, root / "training", device=device)
+    record = {"recipe": recipe, "status": "training", "run_mode": "mujoco", "device": device,
               "requested_updates": spec["steps"], "argv": args, "train_worlds": len(data["episodes"]),
               "validation_worlds": len(validation["episodes"]), "dataset": str(dataset),
               "run_directory": str(root), "compute_reservation": grant, "input_profile": input_profile, **visual}
     atomic(root / "run.json", record)
     started = time.monotonic()
-    record.update(run_once(args, root / "training.log", root / "training", spec["wall_seconds"], heartbeat))
+    record.update(run_once(args, root / "training.log", root / "training", spec["wall_seconds"], heartbeat, device=device))
     bind_checkpoints(root / "training/checkpoints", {"dataset": str(dataset), "input_profile": input_profile, **visual})
     record["elapsed_s"] = time.monotonic() - started
     atomic(root / "run.json", record)
@@ -136,13 +146,14 @@ def bind_checkpoints(home, binding):
             atomic(path / "smart-swarm-input.json", binding)
 
 
-def run_once(args, logfile, output, timeout, heartbeat):
+def run_once(args, logfile, output, timeout, heartbeat, *, device="cpu"):
     from .contract import ProtocolError
     from .research_jobs import execute
 
+    env = {**offline(device=device), "SMART_SWARM_TRAINING_DEVICE": device}
     with logfile.open("w") as stream:
         try:
-            code = execute(args, offline(), stream, time.monotonic() + timeout, heartbeat)
+            code = execute(args, env, stream, time.monotonic() + timeout, heartbeat)
         except TimeoutError:
             return {"status": "wall_time_capped"}
         except KeyboardInterrupt:

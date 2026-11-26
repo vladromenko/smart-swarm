@@ -1,18 +1,28 @@
 """Short attended prompts around the native controls and story journal."""
 
+from math import ceil
 import time
 
-from .episode import load
+from .episode import atomic, load
+from .native_fleet_start import START_GATE, START_RECEIPT, valid_start_receipt
+from .physical_learned import DEFERRED
 from .physical_story_condition import CARRIER_MOVE, RELOCATION_CHECKS, REMOVAL
 from .physical_story_motor import review_pending_motor
 from .physical_story_plan import prepare
-from .physical_story_replay import (OUTCOMES, predict_selected, recover_pending_prediction, recover_sealed_reveal,
-                                    terminal_reveal)
-from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, TITLE, begin, fleet_manifest, mark,
-                                    restore_start, same_recording_boot, story_preflight, story_workspace)
+from .physical_story_replay import OUTCOMES, close_interrupted_story, predict_selected, recover_story, terminal_reveal
+from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, STATIONARY_LEAD_IN_S, TITLE, begin,
+                                    fleet_manifest, mark, same_recording_boot, start_relocation,
+                                    story_preflight, story_workspace)
 
 
-def next_story(config):
+class StoryDeckComplete(ValueError):
+    """Every prepared card already has a saved attempt."""
+
+
+MIN_RELOCATION_S = 15
+
+
+def next_story(config, *, preview=False):
     root = story_workspace(config)
     plan = prepare(config)
     unstarted = None
@@ -20,17 +30,37 @@ def next_story(config):
         trial = root / row["story_id"]
         journal = trial / "trial.json"
         if journal.is_file():
-            state = restore_start(config, trial, load(journal))
-            if state["status"] == "recording":
-                recover_pending_prediction(trial, state)
-            state = recover_sealed_reveal(trial, state)
+            state = load(journal)
+            if not preview and state["status"] in ACTIVE_STORY_STATES:
+                state = recover_story(config, trial)
             if state["status"] in ACTIVE_STORY_STATES:
                 return row, state
         elif unstarted is None:
             unstarted = row
     if unstarted is not None:
         return unstarted, None
-    raise ValueError("All 24 prepared stories already have a saved attempt")
+    raise StoryDeckComplete("All 24 prepared stories already have a saved attempt")
+
+
+def carrier_instruction(card):
+    return f"Assigned carrier station is {card['requested_carrier_destination']} as seen by ROSMASTER."
+
+
+def show(config):
+    plan = prepare(config)
+    print(f"\n{plan['title']}\n{plan['plan_path']}")
+    try:
+        selected, state = next_story(config, preview=True)
+    except StoryDeckComplete as done:
+        print(done)
+        return
+    print(f"Block {selected['block']} of {plan['blocks']}.")
+    print(f"{'Resume' if state else 'Next'} {selected['story_id']}. {carrier_instruction(selected)}")
+    for row in plan["cards"]:
+        if row["block"] == selected["block"]:
+            print(f"\n{row['family']} · {row['task']}")
+            for field in ("placement", "relocation", "withheld", "query_boundary", "reveal_boundary"):
+                print(f"  {row[field]}")
 
 
 def wait_for_capture(config, identifier):
@@ -50,6 +80,13 @@ def is_capturing(config, state):
 def physical_steps(config, identifier, state):
     if not same_recording_boot(state) or not is_capturing(config, state):
         return state
+    state = record_placement(config, identifier, state)
+    if "placement_closed" in state["markers"] and "relocation_closed" not in state["markers"]:
+        state = record_relocation(config, identifier, state)
+    return state
+
+
+def record_placement(config, identifier, state):
     if not state["markers"]:
         print(f"In SO101 Studio select {TITLE}. Start native recording and follow the placement card.")
     family = state["card"]["family"]
@@ -57,7 +94,8 @@ def physical_steps(config, identifier, state):
     if f3 and "insertion_closed" not in state["markers"]:
         outcome, assistance = observe_placement("After the first insertion and withdrawal")
         state = mark(config, identifier, "insertion_closed", assistance=assistance, placement_outcome=outcome)
-    if "placement_closed" not in state["markers"] and is_capturing(config, state):
+    if "placement_closed" not in state["markers"] and (state["status"] == "placement_recording"
+                                                       or is_capturing(config, state)):
         observed = None
         if f3:
             print("Keep Studio recording for the removal and withdrawal.")
@@ -68,12 +106,60 @@ def physical_steps(config, identifier, state):
         state = mark(config, identifier, "placement_closed", assistance=assistance, placement_outcome=outcome,
                      observed_change=observed)
         print("Save the native Studio episode now, then end its session before moving the carrier.")
-    if "placement_closed" in state["markers"] and "relocation_closed" not in state["markers"] and is_capturing(config, state):
-        print("Give Tank at least twelve seconds of footage around the stationary start, relocation and settled destination.")
-        expected = RELOCATION_CHECKS.get(family, CARRIER_MOVE)
-        assistance, observed = observe_motion("relocation", "human_relocation", expected, unknown_actor="unknown")
-        state = mark(config, identifier, "relocation_closed", assistance=assistance, observed_change=observed)
     return state
+
+
+def archived_rgb_started(config, state):
+    gate = state.get("fleet_rgb_start_gate")
+    if gate is None:
+        return True
+    path = story_workspace(config) / state["card"]["story_id"] / START_RECEIPT
+    try:
+        receipt = load(path)
+        return (gate == START_GATE and receipt["seen_monotonic_ns"] <= time.monotonic_ns()
+                and valid_start_receipt(receipt, state["fleet_capture_id"], state["fleet_acknowledgement"]))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def wait_stationary_lead_in(config, state):
+    acknowledged = state.get("fleet_acknowledgement")
+    if acknowledged is None:
+        print("Give Tank at least twelve seconds around the start, relocation and settled destination.")
+        return is_capturing(config, state)
+    age = lambda: (time.monotonic_ns() - acknowledged["monotonic_ns"]) / 1e9
+    hold = ceil(STATIONARY_LEAD_IN_S - age())
+    if hold > 0:
+        print(f"Explorer acknowledged recording. Keep the scene still for {hold} seconds.", flush=True)
+    proof = lambda: age() >= STATIONARY_LEAD_IN_S and archived_rgb_started(config, state)
+    if state.get("fleet_rgb_start_gate"):
+        print("Waiting for recorded RGB from both native streams before relocation.", flush=True)
+    while age() < state["fleet_window_s"] - MIN_RELOCATION_S and not proof() and is_capturing(config, state):
+        until_lead_in = STATIONARY_LEAD_IN_S - age()
+        time.sleep(min(2, until_lead_in) if until_lead_in > 0 else 1.)
+    remaining = state["fleet_window_s"] - age()
+    if remaining < MIN_RELOCATION_S or not proof() or not is_capturing(config, state):
+        print("There is no full relocation window left. Keep the scene still for archive readback.")
+        return False
+    print(f"Explorer recording. About {ceil(remaining)} seconds remain in the acknowledged window.")
+    return True
+
+
+def record_relocation(config, identifier, state):
+    if not wait_stationary_lead_in(config, state):
+        if state.get("fleet_rgb_start_gate"):
+            state["relocation_prompt_withheld"] = "The live recording did not confirm a usable RGB start with time left for relocation"
+            atomic(story_workspace(config) / identifier / "trial.json", state)
+        return state
+    print(carrier_instruction(state["card"]))
+    print("Move the carrier now. Hold the settled destination for three seconds so Tank can record it, then confirm.")
+    print("Keep the final scene still for ROSMASTER until Explorer finishes.")
+    expected = RELOCATION_CHECKS.get(state["card"]["family"], CARRIER_MOVE)
+    assistance, observed = observe_motion("relocation", "human_relocation", expected, unknown_actor="unknown")
+    if not is_capturing(config, state):
+        print("Explorer ended before confirmation. Saving the available recording for review.")
+        return state
+    return mark(config, identifier, "relocation_closed", assistance=assistance, observed_change=observed)
 
 
 def observe_placement(when):
@@ -108,19 +194,41 @@ def block_saved(config, block):
 
 def report_motor_review(config):
     result = review_pending_motor(config)
+    show_motor_review(result)
+    return result
+
+
+def show_motor_review(result):
     if result["attempted"]:
         eligible = sum(item["status"] == "reviewable_prefix" for item in result["states"].values())
         waiting = sum(item["status"] == "pending_review" for item in result["states"].values())
         print(f"Motor review saved {eligible} prefixes. {waiting} remain pending.")
     if result["errors"]:
         print("Native export will be retried on the next review. " + ". ".join(result["errors"].values()))
-    return result
+    for storage in result.get("export_storage", {}).values():
+        if storage["state"] == "pending":
+            print(f"Studio export is usable at its original path. Secondary storage is pending. {storage['reason']}")
 
 
 def close_block(config, card):
     if block_saved(config, card["block"]):
-        print("This story block is saved. The motor review needs no scene or operator action.", flush=True)
-        report_motor_review(config)
+        print("This story block is saved. Pending motor reviews run between stories while the launcher is open.", flush=True)
+
+
+def close_active(config):
+    card, state = next_story(config, preview=True)
+    if state is None:
+        print("There is no active story to close.")
+        return False
+    identifier = card["story_id"]
+    print(f"Close interrupted story {identifier} only after saving or stopping in the native console.")
+    reason = input("Enter the observed interruption reason to save this card as incomplete, or press Enter to keep it open: ").strip()
+    if not reason:
+        return False
+    result = close_interrupted_story(config, identifier, reason)
+    print(f"Saved {identifier} as incomplete. {result['reason']}")
+    close_block(config, card)
+    return True
 
 
 def show_prediction(decision):
@@ -132,33 +240,74 @@ def show_prediction(decision):
         heads = learned["receipt"]["heads"]
         print("ROSMASTER pre-inspection choice", heads["events_only"]["decision"], "(frozen events-only policy)")
         print("Reveal-supervised comparison", heads["events_plus_reveal"]["decision"])
+    elif learned["status"] == DEFERRED:
+        failure = learned.get("online_attempt")
+        if failure is not None:
+            print(f"Online learned forecasting was unavailable. {failure['reason']}")
+        print("Private inputs are sealed. The frozen learned forecast will run as blind offline replay after reveal.")
     else:
         print("Frozen learned prediction", learned.get("reason", learned["status"]))
     print("RGB rule comparison", decision["query_all"]["decision"], flush=True)
 
 
-def run(config):
+def show_selected_card(card, state):
+    print(f"Block {card['block']} · {card['family']} · {card['task']}")
+    if state is None:
+        print(card["reset"])
+        for region in card["placement_regions"]:
+            print(region)
+        print(card["withheld"])
+    elif state["status"] == "pending_reveal":
+        print("Resume the saved forecast with the recorded terminal relation unchanged.")
+        return
+    markers = state["markers"] if state else {}
+    if "placement_closed" not in markers:
+        print(card["placement"])
+    if "relocation_closed" not in markers:
+        print(carrier_instruction(card))
+        print(card["relocation"])
+
+
+def run(config, *, evaluation_mode="online"):
     card, state = next_story(config)
     identifier = card["story_id"]
-    for field in ("task", "placement", "relocation", "withheld", "reset"):
-        print(card[field])
+    show_selected_card(card, state)
+    mode = state.get("evaluation_mode", "online") if state else evaluation_mode
+    print(f"Learned forecast mode: {mode.replace('_', ' ')}.")
     if state is None:
         print("Place a green station card on ROSMASTER's left and a blue one on its right. Both cameras should see both cards.")
         story_preflight(config)
-        input("Press Enter when the scene, views and native controls are ready to start capture: ")
-        state = begin(config, identifier)
+        if input("Press Enter to start when ready, or type q to return to the menu: ").strip():
+            return
+        state = begin(config, identifier, staged=True, evaluation_mode=mode)
+    decision = record_or_resume(config, identifier, state)
+    if decision is None:
+        return
+    if decision.get("status") == "incomplete":
+        print(f"Saved {identifier} as incomplete. {decision['reason']}")
+    else:
+        request_reveal(config, identifier, decision)
+    close_block(config, card)
+
+
+def record_or_resume(config, identifier, state):
+    if state["status"] == "placement_recording" and same_recording_boot(state):
+        state = record_placement(config, identifier, state)
+        print("Save the Studio episode and stop native control. Keep the container still for the next phase.")
+        if input("Press Enter when Studio has saved and stopped, or q to resume later: ").strip():
+            return None
+        state = start_relocation(config, identifier)
     if state["status"] == "preparing":
         print("Waiting for the native Explorer start receipt. Reopen this card after the capture acknowledges.")
-        return
+        return None
     if state["status"] == "recording" and same_recording_boot(state):
         state = physical_steps(config, identifier, state)
         print("Keep the terminal relation unchanged. Waiting for the native recording readback.")
         wait_for_capture(config, state["fleet_capture_id"])
-    decision = predict_selected(config, identifier)
-    if decision.get("status") == "incomplete":
-        print(f"Saved {identifier} as incomplete. {decision['reason']}")
-        close_block(config, card)
-        return
+    return predict_selected(config, identifier)
+
+
+def request_reveal(config, identifier, decision):
     show_prediction(decision)
     print("With motion stopped, reveal for the evaluator's overhead view only.")
     print("Use an outcome only if the object relation stayed unchanged until reveal. Enter x if you cannot confirm that.")
@@ -169,4 +318,3 @@ def run(config):
         raise ValueError("Unknown outcome label. The prediction is saved and can be reopened")
     result = terminal_reveal(config, identifier, outcome, preserved=outcome != "relation_unverified")
     print(f"Saved {identifier}, status {result['status']}, outcome {result['observed_terminal_outcome']}.")
-    close_block(config, card)

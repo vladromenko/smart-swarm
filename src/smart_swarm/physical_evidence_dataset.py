@@ -11,14 +11,16 @@ from .datasets import audit_lineage
 from .episode import DELIVERIES, LABELS, POLICY, TRUTH, Replay, atomic, load, rows, sha, validate
 from .evidence_inputs import runtime_signature
 from .memory import QUERY
-from .physical_learned import verify_optional as verify_learned_prediction
+from .physical_learned import DEFERRED, verify_optional as verify_learned_prediction
 from .physical_motor_prefix import episode_directory
+from .physical_offline import read_replay
 from .physical_reveal import validate_sealed_clip
 from .physical_slot_reference import SCOPE_FLAG, verify_decision_reference
 from .physical_story_annotations import apply_reviews
 from .physical_story_condition import PHASE_DIGEST, audit_condition
 from .physical_story_plan import prepare
 from .physical_story_replay import AGENTS, OUTCOMES
+from .physical_story_source import mobile_phase_bounds
 from .primary_inputs import primary_policy_view
 
 SCHEMA = "smart-swarm-physical-evidence-corpus-v1"
@@ -67,12 +69,8 @@ def verify_role_scopes(root, manifest):
 
 def verify_fleet_windows(trial, root, journal):
     audit = load(trial / "fleet-timing-audit.json")
-    start = journal["markers"]["placement_closed"]["monotonic_ns"]
-    moved = journal["markers"]["relocation_closed"]["monotonic_ns"]
-    stop = journal["query_ns"]
-    if not start < moved < stop:
-        raise ValueError("The native placement, relocation and query windows are out of order")
-    scopes = ((AGENTS[1], start, moved, 8), (AGENTS[2], moved, stop, 1))
+    tank, receiver = mobile_phase_bounds(journal, journal["query_ns"])
+    scopes = ((AGENTS[1], *tank, 8), (AGENTS[2], *receiver, 1))
     for agent, early, late, required in scopes:
         proof = audit[agent]
         if (proof["permitted_interval_ns"] != [early, late] or proof["selected"] != required
@@ -167,6 +165,11 @@ def load_admitted(config, trial, card, journal):
               "assistance_by_phase": assistance, "attended_placement_outcomes": outcomes}
     if "learned_evidence" in journal["decision"]:
         record["learned_evidence"] = verify_learned_prediction(root, manifest, journal["decision"])
+        if record["learned_evidence"]["status"] == DEFERRED:
+            try:
+                record["blind_offline_forecast"] = read_replay(root)
+            except (OSError, ValueError, KeyError) as error:
+                record["blind_offline_forecast_error"] = str(error)
     with policy_view(record) as scoped:
         record["permitted_input_sha256"] = sha256(json_bytes(physical_policy_signature(scoped))).hexdigest()
     reviewed = apply_reviews(trial, root, journal, record)

@@ -81,6 +81,39 @@ def check_storage_rejection(export, prefix):
             raise ValueError("The prefix reader did not reject changed export storage bytes")
 
 
+def check_interior_row_rejections(export, source):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    parquet, = sorted((export / "data").rglob("*.parquet"))
+    table = pq.ParquetFile(parquet).read()
+    if table.num_rows < 3 or len(set(table["episode_index"].to_pylist()[:3])) != 1:
+        raise ValueError("The technical export must provide an interior row")
+    changes = {"action": lambda v: [v[0] + .125, *v[1:]], "raw.wrist.timestamp_ns": lambda v: v - 1,
+               "raw.action_valid": lambda v: not v, "raw.action_acknowledged": lambda v: not v,
+               "timestamp": lambda v: v + .001}
+    rejection = {}
+    with TemporaryDirectory(prefix="smart-swarm-native-interior-rows-") as directory:
+        for column, modify in changes.items():
+            copy = Path(directory) / column
+            copytree(export, copy)
+            values = table[column].to_pylist()
+            values[1] = modify(values[1])
+            field = table.schema.field(column)
+            changed = table.set_column(table.schema.get_field_index(column), field, pa.array(values, type=field.type))
+            pq.write_table(changed, copy / parquet.relative_to(export))
+            try:
+                verify(source, copy, True)
+            except ValueError as error:
+                expected = "relative time" if column == "timestamp" else column
+                if expected not in str(error):
+                    raise
+                rejection[column] = str(error)
+            else:
+                raise ValueError(f"The consumer accepted a changed interior {column} field")
+    return rejection
+
+
 def audit(export, source):
     meta = export / "provenance/export.json"
     before = sha(meta)
@@ -94,6 +127,7 @@ def audit(export, source):
     data = LeRobotDataset(file["repo_id"], root=export, return_uint8=True)
     checked = check_batch(reader, data, prefixes)
     check_storage_rejection(export, prefixes[0])
+    changed_rows = check_interior_row_rejections(export, source)
     if sha(meta) != before:
         raise ValueError("Rehearsal changed the existing official export")
     return {"scope": "Native technical archive with existing LeRobot storage", "source_export": str(export),
@@ -101,7 +135,8 @@ def audit(export, source):
             "export_storage_sha256": prefixes[0]["native_export"]["export_storage_sha256"],
             "native_prefixes": len(prefixes), "rows_in_batch": len(reader), "group_count": record["source_group_count"],
             **checked, "rejected_inputs": [*check_rejections(record), "changed_export_storage"], "physical_prefixes_admitted": 0,
-            "model_optimizer_updates": 0}
+            "model_optimizer_updates": 0, "numeric_rows_verified": verification["numeric_rows_verified"],
+            "measured_recording_timing": verification["episodes"], "changed_interior_rows_refused": changed_rows}
 
 
 def main():

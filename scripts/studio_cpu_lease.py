@@ -19,16 +19,17 @@ def check_graphics():
     return assert_compute_available("cuda", minimum_available_gb=7)
 
 
-def hold(gpu_render):
-    if gpu_render:
+def hold(gpu_render, archive_only=False, *, cuda_compute=False):
+    needs_gpu = gpu_render or cuda_compute
+    if needs_gpu:
         check_graphics()
     with ExitStack() as stack:
-        locks = ["cpu_compute", "recording"]
-        if gpu_render:
+        locks = ["cpu_compute"] if archive_only else ["cpu_compute", "recording"]
+        if needs_gpu:
             locks.append("gpu_compute")
         for name in locks:
             stack.enter_context(ResourceLease(name))
-        snapshot = check_graphics() if gpu_render else assert_compute_available("cpu", minimum_available_gb=3)
+        snapshot = check_graphics() if needs_gpu else assert_compute_available("cpu", minimum_available_gb=3)
         print(json.dumps({"reserved": True, "backend": "so101_lab.resources.ResourceLease",
                           "locks": locks,
                           "memory_available_bytes": snapshot["memory_available_bytes"]}), flush=True)
@@ -39,10 +40,13 @@ def hold(gpu_render):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gpu-render", action="store_true")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--gpu-render", action="store_true")
+    scope.add_argument("--gpu-compute", action="store_true", help="Hold Studio's existing CUDA and recorder reservations")
+    scope.add_argument("--archive-only", action="store_true", help="Reserve just CPU for already sealed inputs")
     args = parser.parse_args()
     try:
-        hold(args.gpu_render)
+        hold(args.gpu_render, args.archive_only, cuda_compute=args.gpu_compute)
     except ResourceBusy as error:
         raise SystemExit(str(error))
 

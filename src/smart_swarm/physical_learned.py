@@ -8,7 +8,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
-from .contract import ProtocolError, json_bytes, time_at
+from .contract import ProtocolError, json_bytes, project_packet, time_at, timestamp_at
 from .episode import POLICY, atomic, load, rows, sha, validate_agent
 from .evidence_inputs import AGENTS, canonical_packet, opaque_map
 from .physical_slot_reference import SCOPE_FLAG
@@ -18,10 +18,12 @@ from .training import ROOT, offline
 
 PROFILE = ROOT / "evidence/learning-pilot-v3/primary-profiles-frozen.json"
 WORKER = ROOT / "scripts/physical_learned_worker.py"
-SCHEMA = "smart-swarm-frozen-physical-memory-v1"
+LEGACY_SCHEMA = "smart-swarm-frozen-physical-memory-v1"
+SCHEMA = "smart-swarm-frozen-physical-memory-v2"
 METHOD = "selective_with_observed_marker_support"
 HEADS = ("events_only", "events_plus_reveal")
 TIMEOUT_S = 30
+DEFERRED = "deferred_blind_offline"
 
 
 def packets(root, manifest):
@@ -31,12 +33,31 @@ def packets(root, manifest):
     return {agent: rows(root / POLICY / f"{agent}.jsonl") for agent in grants}
 
 
-def window_digest(manifest, stream):
-    mapping = opaque_map(stream, manifest["world_episode_id"])
-    clean = {agent: [canonical_packet(packet, mapping) for packet in frames] for agent, frames in stream.items()}
-    fields = {key: manifest[key] for key in ("policy_cameras", "query_boundary")}
+def policy_manifest(manifest):
+    query = timestamp_at(manifest["query_boundary"])
+    duration = load(ROOT / "configs/primary-memory-study.json")["communication_reply_window_ms"] * 1_000_000
+    fields = {"policy_cameras": manifest["policy_cameras"], "query_boundary": query, "world_episode_id": "world",
+              "decision_boundary": time_at(int(query["monotonic_ns"]) + duration, query["clock_id"])}
     if manifest.get(SCOPE_FLAG):
         fields[SCOPE_FLAG] = True
+    return fields
+
+
+def project_stream(manifest, stream):
+    grants = manifest["policy_cameras"]
+    return {agent: [project_packet(packet, agent, grants[agent]) for packet in frames] for agent, frames in stream.items()}
+
+
+def window_digest(manifest, stream, *, projected=False, legacy=False):
+    if legacy:
+        fields = {key: manifest[key] for key in ("policy_cameras", "query_boundary")}
+        if manifest.get(SCOPE_FLAG):
+            fields[SCOPE_FLAG] = True
+    else:
+        fields = manifest if projected else policy_manifest(manifest)
+        stream = project_stream(manifest, stream)
+    mapping = opaque_map(stream, manifest["world_episode_id"])
+    clean = {agent: [canonical_packet(packet, mapping) for packet in frames] for agent, frames in stream.items()}
     return sha256(json_bytes({**fields, "private_history": clean})).hexdigest()
 
 
@@ -57,15 +78,10 @@ def validate_scope(root, manifest, stream):
 @contextmanager
 def scoped_window(root, manifest):
     stream = packets(root, manifest)
-    boundary = manifest["query_boundary"]
-    query = int(boundary["monotonic_ns"])
     validate_scope(root, manifest, stream)
+    stream = project_stream(manifest, stream)
     mapping = opaque_map(stream, manifest["world_episode_id"])
-    scoped = {key: manifest[key] for key in ("policy_cameras", "query_boundary")}
-    if manifest.get(SCOPE_FLAG):
-        scoped[SCOPE_FLAG] = True
-    deadline = query + load(ROOT / "configs/primary-memory-study.json")["communication_reply_window_ms"] * 1_000_000
-    scoped.update(world_episode_id="world", decision_boundary=time_at(deadline, boundary["clock_id"]))
+    scoped = policy_manifest(manifest)
     with TemporaryDirectory(prefix="smart-swarm-native-learned-") as directory:
         target = Path(directory)
         (target / POLICY).mkdir()
@@ -74,13 +90,13 @@ def scoped_window(root, manifest):
             json_lines(target / POLICY / f"{agent}.jsonl", projected)
         atomic(target / "manifest.json", scoped)
         digest = window_digest(manifest, stream)
-        if window_digest(scoped, packets(target, scoped)) != digest:
+        if window_digest(scoped, packets(target, scoped), projected=True) != digest:
             raise ValueError("The learned window changed the recorded private packets")
         yield target, digest
 
 
-def verify_result(report, digest):
-    if (report["schema"] != SCHEMA or report["policy"] != METHOD or report["permitted_input_sha256"] != digest
+def verify_result(report, digest, *, schema=SCHEMA):
+    if (report["schema"] != schema or report["policy"] != METHOD or report["permitted_input_sha256"] != digest
             or report["profiles_sha256"] != sha(PROFILE) or set(report["heads"]) != set(HEADS)):
         raise ValueError("The frozen physical inference receipt disagrees with its policy input or profile")
     profile = load(PROFILE)
@@ -109,15 +125,60 @@ def run_worker(scoped, digest):
 
 def inference(config, recorder, query):
     manifest = {**recorder.meta, "sample_counts": recorder.counts, "query_boundary": time_at(query, recorder.clock)}
+    admitted_online = False
     try:
         with admitted(config, "smart-swarm-physical-evidence-inference") as (grant, heartbeat):
+            admitted_online = True
             with scoped_window(recorder.root, manifest) as (scoped, digest):
                 result = run_worker(scoped, digest)
             heartbeat()
         admission = {key: grant[key] for key in ("job_id", "device", "scope") if key in grant}
         return {"status": "scored", "receipt": result, "admission": admission}
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired, ProtocolError) as error:
-        return {"status": "unavailable", "reason": str(error)}
+        failure = {"status": "unavailable", "reason": str(error) or type(error).__name__}
+        if admitted_online:
+            return failure
+        return defer_online_admission(recorder.root, manifest, failure)
+
+
+def defer_online_admission(root, manifest, failure):
+    try:
+        seal = offline_seal(root, manifest)
+    except (OSError, ValueError, KeyError, TypeError, ProtocolError) as error:
+        return {**failure, "reason": f"{failure['reason']}. Blind offline input seal failed. {error}"}
+    return {**seal, "online_attempt": {**failure, "stage": "compute_admission"}}
+
+
+def offline_seal(root, manifest):
+    stream = packets(root, manifest)
+    validate_scope(root, manifest, stream)
+    return {"status": DEFERRED, "profiles_sha256": sha(PROFILE),
+            "permitted_input_sha256": window_digest(manifest, stream)}
+
+
+def verify_offline_seal(root, manifest, seal):
+    expected = offline_seal(root, manifest)
+    if "online_attempt" in seal:
+        attempt = seal["online_attempt"]
+        if (not isinstance(attempt, dict) or set(attempt) != {"status", "reason", "stage"}
+                or attempt["status"] != "unavailable" or attempt["stage"] != "compute_admission"
+                or not isinstance(attempt["reason"], str) or not attempt["reason"].strip()):
+            raise ValueError("The offline seal has an invalid online admission record")
+        expected["online_attempt"] = attempt
+    if expected != seal:
+        raise ValueError("The archived private window differs from its pre-reveal seal")
+
+
+def blind_inference(config, root, manifest, seal):
+    verify_offline_seal(root, manifest, seal)
+    with admitted(config, "smart-swarm-physical-blind-offline", archive_only=True) as (grant, heartbeat):
+        with scoped_window(root, manifest) as (scoped, digest):
+            if digest != seal["permitted_input_sha256"]:
+                raise ValueError("The isolated reader received a different private window")
+            result = run_worker(scoped, digest)
+        heartbeat()
+    return {"status": "scored", "mode": "blind_offline", "receipt": result,
+            "admission": {key: grant[key] for key in ("job_id", "device", "scope")}}
 
 
 def verify_optional(root, manifest, decision):
@@ -125,7 +186,17 @@ def verify_optional(root, manifest, decision):
     if learned is None:
         return {"status": "historical_rule_only"}
     if learned["status"] == "scored":
-        verify_result(learned["receipt"], window_digest(manifest, packets(root, manifest)))
+        receipt = learned["receipt"]
+        legacy = receipt["schema"] == LEGACY_SCHEMA
+        if not legacy:
+            scope = policy_manifest(manifest)
+            duration = int(scope["decision_boundary"]["monotonic_ns"]) - int(scope["query_boundary"]["monotonic_ns"])
+            if receipt["modeled_reply_window_ns"] != duration:
+                raise ValueError("The frozen physical inference receipt names a different reply window")
+        digest = window_digest(manifest, packets(root, manifest), legacy=legacy)
+        verify_result(receipt, digest, schema=LEGACY_SCHEMA if legacy else SCHEMA)
+    elif learned["status"] == DEFERRED:
+        verify_offline_seal(root, manifest, learned)
     elif learned["status"] != "unavailable" or not learned.get("reason"):
         raise ValueError("The physical inference attempt has neither a receipt nor an explicit failure")
     return learned

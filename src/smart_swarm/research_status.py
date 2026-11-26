@@ -13,7 +13,8 @@ TEST_ROOT = WORK / "primary-sim-test"
 COMPACT_OLD = WORK / "motor-compact-rehearsal-v1"
 COMPACT = WORK / "motor-compact-rehearsal-v2"
 HEADS = ("events_only", "events_plus_reveal")
-STAGES = {"scripts/capture_primary_test.py": "capture", "scripts/score_primary_test.py": "scoring"}
+STAGES = {"scripts/capture_primary_test.py": "capture", "scripts/score_primary_test.py": "scoring",
+          "scripts/replay_primary_compact_controls.py": "matched_compact_controls"}
 PYTHON_FLAGS = {b"-u", b"-B", b"-I", b"-s", b"-S", b"-O", b"-OO"}
 
 
@@ -155,6 +156,26 @@ def optimizer_pid(argv, proc=Path("/proc")):
     return None
 
 
+def motor_evaluation_progress(root, result):
+    choices = saved(root / "validation-choices.json") or []
+    validation = [{key: row[key] for key in ("checkpoint", "successful_resets", "offline_validation_mean_loss")}
+                  | {"resets": len(row["resets"])} for row in choices]
+    verified = {row["checkpoint"] for row in validation}
+    fresh = {path: saved(path) for path in sorted(root.glob("fresh/*/evaluation.json"))}
+    selected = result.get("checkpoint")
+    evaluated = {row["checkpoint"] for row in fresh.values() if row.get("evaluation_role") == "fresh-test"}
+    if selected is None and len(evaluated) == 1 and evaluated <= verified:
+        selected = next(iter(evaluated))
+    fresh_results = [attempt for row in fresh.values() for attempt in row["results"]]
+    progress = [{key: row[key] for key in ("checkpoint", "status", "requested_resets")}
+                | {"receipt": str(path), "completed_resets": len(row["results"])} for path, row in fresh.items()]
+    validation_counts = [len(saved(path)["resets"]) for path in sorted(root.glob("validation/*/validation.json"))]
+    return {"selected_checkpoint": selected, "completed_validation_candidates": validation,
+            "validation_resets_by_candidate": validation_counts, "fresh_evaluations": progress,
+            "fresh_resets": len(fresh_results),
+            "fresh_successes": sum(attempt["contact_valid_placement"] for attempt in fresh_results)}
+
+
 def motor_run_progress(result):
     if not result.get("job_directory"):
         return {"optimizer_updates": result.get("optimizer_updates", 0), "optimizer_pid": None}
@@ -166,17 +187,11 @@ def motor_run_progress(result):
     checkpoints = root / "training/checkpoints"
     saved_paths = sorted(path / "pretrained_model" for path in checkpoints.iterdir()
                          if path.name.isdecimal() and (path / "pretrained_model/model.safetensors").is_file()) if checkpoints.is_dir() else []
-    validation = [saved(path) for path in sorted(root.glob("validation/*/validation.json"))]
-    fresh = [saved(path) for path in sorted(root.glob("fresh/*/evaluation.json"))]
-    fresh_results = [attempt for row in fresh for attempt in row["results"]]
     return {"dataset": result["dataset"], "job_directory": str(root), "cap": result["cap"],
             "optimizer_updates": result.get("optimizer_updates", rows[-1]["update"] if rows else 0),
             "latest_reported_loss": rows[-1]["loss"] if rows else None,
             "optimizer_pid": optimizer_pid(run["argv"]) if run.get("status") == "training" and run.get("argv") else None,
-            "complete_checkpoints": [str(path) for path in saved_paths], "selected_checkpoint": result.get("checkpoint"),
-            "validation_resets_by_candidate": [len(row["resets"]) for row in validation],
-            "fresh_resets": len(fresh_results),
-            "fresh_successes": sum(attempt["contact_valid_placement"] for attempt in fresh_results)}
+            "complete_checkpoints": [str(path) for path in saved_paths], **motor_evaluation_progress(root, result)}
 
 
 def motor():
@@ -191,15 +206,90 @@ def motor():
     comparisons = {name: saved(PILOT / f"{name}-full.json") for name in ("act", "smolvla")}
     development_profile = COMPACT / "smolvla-development-profile.json"
     profile = saved(development_profile)
+    native_path = PILOT / "native-policy-timing-and-stop-signal-rehearsal.json"
+    native = saved(native_path)
     return {"historical_development_evaluations": archived, "matched_act_attempts": current.get("matching_starts"),
             "matched_act_successes": current.get("successful"), "act_fit_gate": current.get("fit_gate"),
             "act_checkpoint": current.get("checkpoint"),
+            "act_precontact_diagnostics": act_precontact_diagnostics(),
             "smolvla_development_profile": {"status": profile.get("status", "awaiting_receipt"),
                                              "charged_wall_s": profile.get("charged_wall_s"),
                                              "receipt": str(development_profile) if profile else None},
+            "smolvla_training_exposure": motor_exposure(),
+            "device_timing_profiles": motor_device_profiles(),
+            "native_execution_qualification": {"hardware_execution_qualified": native.get("hardware_execution_qualified"),
+                                               "receipt": str(native_path) if native else None},
             "full_comparison_status": {name: row.get("status", "awaiting_receipt") for name, row in comparisons.items()},
             "full_comparison_progress": {name: motor_run_progress(row) for name, row in comparisons.items()},
             "first_failure_stages": dict(Counter(row["first_failed_stage"] for row in fitting if row["first_failed_stage"]))}
+
+
+def act_precontact_diagnostics():
+    geometry = saved(PILOT / "act-precontact-teacher-physics.json")
+    optical = PILOT / "act-precontact-teacher-rgb-v2.json"
+    failure = PILOT / "act-precontact-teacher-rgb-v2-failed.json"
+    pixel = PILOT / "act-precontact-stock-pixel-mismatch.json"
+    raster = PILOT / "act-stock-static-raster.json"
+    measured = saved(raster)
+    timing = PILOT / "act-archived-clock-offset.json"
+    verified = saved(timing)
+    return {"contact_valid_teacher_starts": len(geometry.get("qualified_contact_free_starts", [])),
+            "optical_status": "evaluated" if optical.is_file() else ("stock_rgb_parity_failed" if failure.is_file() else "pending"),
+            "optical_replay_receipt": str(optical) if optical.is_file() else None,
+            "optical_failure_receipt": str(failure) if failure.is_file() else None,
+            "stock_mismatch_receipt": str(pixel) if pixel.is_file() else None,
+            "static_raster_receipt": str(raster) if measured else None,
+            "static_raster_status": measured.get("status", "awaiting_receipt"),
+            "remaining_original_raster_budget_s": measured.get("remaining_original_seconds"),
+            "clock_replay_receipt": str(timing) if verified else None,
+            "clock_replay_development_sources": len(verified.get("sources", []))}
+
+
+def motor_device_profiles():
+    profiles = {}
+    for path in sorted(PILOT.glob("*-worker-timing.json"), key=lambda item: (item.stat().st_mtime_ns, item.name)):
+        report = saved(path)
+        if report.get("requested_device") not in ("cpu", "cuda") or report.get("model") not in ("act", "smolvla"):
+            raise ValueError(f"Unrecognized motor timing receipt {path}")
+        model, device = report["model"], report["requested_device"]
+        row = {"status": report["status"], "receipt": str(path), "worker_started": report["worker_started"]}
+        if report["status"] == "profiled":
+            requests = report["action_requests"]
+            row.update(verified_training_rows=report["verified_training_rows"],
+                       fresh_chunk_age_ms=[item["available_observation_age_ns"] / 1e6
+                                           for item in requests if item["fresh_chunk"]],
+                       all_requests_within_coverage=all(item["within_coverage"] for item in requests))
+        elif "reason" in report:
+            row["reason"] = report["reason"]
+        profiles[f"{model}_{device}"] = row
+    stage_path = PILOT / "smolvla-cpu-chunk-stage-timing.json"
+    if stage_path.is_file() and "smolvla_cpu" in profiles:
+        stage = load(stage_path)
+        profiles["smolvla_cpu"]["stage_measurement"] = {
+            "receipt": str(stage_path), "status": stage["status"],
+            "prefix_seconds": [row["prefix_before_first_denoising_step_ns"] / 1e9 for row in stage.get("requests", [])]}
+    return profiles
+
+
+def motor_exposure():
+    path = PILOT / "smolvla-compact-training-exposure.json"
+    report = saved(path)
+    if not report:
+        return {"status": "awaiting_receipt"}
+    summary = report["summary"]
+    initial_path = PILOT / "smolvla-initial-approach-comparison.json"
+    initial = saved(initial_path)
+    geometry_path = PILOT / "smolvla-validation-approach-geometry.json"
+    geometry = saved(geometry_path)
+    keys = ("committed_updates", "source_groups_exposed", "source_groups_available",
+            "startup_horizon_updates", "exact_reset_start_updates", "cpu_update_plus_data_median_s")
+    return {"status": report["status"], "receipt": str(path), "sha256": sha(path),
+            "initializer_comparison": {"status": initial.get("status", "awaiting_receipt"),
+                                       "matched_validation_starts": len(initial.get("cases", [])),
+                                       "receipt": str(initial_path) if initial else None},
+            "validation_approach_geometry": {"receipt": str(geometry_path) if geometry else None,
+                                             **geometry.get("summary", {})},
+            **{name: summary[name] for name in keys}}
 
 
 def high_resolution_inspection():
@@ -210,12 +300,17 @@ def high_resolution_inspection():
     result = load(path)
     comparison_path = WORK / "active-inspection-comparison-mobile-v3/comparison.json"
     comparison = saved(comparison_path)
+    archive = PILOT / "rosmaster-bounded-comparison-homebrain.tar.gz"
+    decisions = PILOT / "rosmaster-inspection-decisions.json"
     return {"status": "qualified_development" if result["ready"] else "not_qualified",
             "controls_reopened": len(result["results"]), "unqualified_cases": result["refused"],
             "remaining_wall_seconds": comparison.get("remaining_wall_seconds", result["remaining_wall_seconds"]),
             "independent_cases_opened": comparison.get("attempted_groups", result["independent_cases_opened"]),
             "independent_valid_pairs": comparison.get("valid_pairs", 0), "receipt": str(path),
-            "comparison": str(comparison_path) if comparison else None}
+            "comparison": str(comparison_path) if comparison else None,
+            "comparison_status": comparison.get("status"),
+            "results_archive": str(archive) if archive.is_file() else None,
+            "inspection_decision_audit": str(decisions) if decisions.is_file() else None}
 
 
 def mobile_inspection():
@@ -240,17 +335,70 @@ def mobile_inspection():
             "independent_attempts": comparison.get("attempted_groups", 0) + high_resolution.get("independent_cases_opened", 0)}
 
 
+def witness_transfer():
+    root = WORK / "witness-transfer-v1"
+    design = saved(root / "design.json")
+    if not design:
+        return {"status": "awaiting_allocation"}
+    sources = design["sources"]
+    reframed = WORK / "witness-transfer-v2-heldout"
+    fresh = saved(reframed / "design.json")
+    release = PILOT / "witness-transfer-policy-release.json"
+    evaluation = PILOT / "witness-transfer-reframed-evaluation.json"
+    return {"allocation": str(root / "design.json"), "planned_source_groups": len(sources),
+            "capture_receipts_by_split": transfer_capture_counts(root, sources),
+            "progress_receipt": str(root / "progress.json") if (root / "progress.json").is_file() else None,
+            "frozen_policy": str(release) if release.is_file() else None,
+            "fresh_evaluation_allocation": str(reframed / "design.json") if fresh else None,
+            "fresh_evaluation_capture_counts": transfer_capture_counts(reframed, fresh["sources"]) if fresh else None,
+            "fresh_evaluation_receipt": str(evaluation) if evaluation.is_file() else None}
+
+
+def transfer_capture_counts(root, sources):
+    states = Counter()
+    for row in sources:
+        receipt = saved(root / row["source_group"] / "receipt.json")
+        phase = receipt.get("status", "unopened")
+        states[row["split"], "unsealed" if phase == "running" else phase] += 1
+    return {split: {state: n for (name, state), n in states.items() if name == split} for split in ("validation", "test")}
+
+
+def matched_compact_controls(workers):
+    root = WORK / "primary-compact-controls-v1"
+    output = PILOT / "primary-matched-compact-controls.json"
+    seal = root / "predictions.json"
+    active = [row for row in workers if row["stage"] == "matched_compact_controls"]
+    groups = len(list((root / "groups").glob("*.json")))
+    if output.is_file() and seal.is_file():
+        status = "evaluated"
+    elif seal.is_file():
+        status = "forecasts_sealed"
+    elif active:
+        status = "forecasting"
+    else:
+        status = "incomplete" if (root / "release.json").is_file() else "awaiting_release"
+    return {"status": status, "source_and_team_groups_on_disk": groups,
+            "live_workers": active, "predictions": str(seal) if seal.is_file() else None,
+            "evaluation": str(output) if status == "evaluated" else None}
+
+
 def memory():
     path = PILOT / "story-learning.json"
     study = saved(path)
+    primary = release_summary()
+    compact = matched_compact_controls(primary["live_workers"])
+    delay = PILOT / "primary-delivery-delay.json"
+    delivery = str(delay) if delay.is_file() else None
     if study.get("status") != "complete":
-        return {"pilot": "pending", "primary": release_summary(), "mobile_inspection": mobile_inspection()}
+        return {"pilot": "pending", "primary": primary, "mobile_inspection": mobile_inspection(),
+                "witness_transfer": witness_transfer(), "matched_compact_controls": compact, "exploratory_delivery_delay": delivery}
     fields = ("independent_groups", "resolvable_count", "resolvable_correct",
               "f6_independent_pairs", "f6_variants", "f6_inspections")
     models = {row["kind"]: {"optimizer_updates": row["updates"], "checkpoint": row["checkpoint"],
               **{name: row["test"][name] for name in fields}} for row in study["models"]}
-    return {"pilot": "evaluated", "pilot_receipt": str(path), "models": models, "primary": release_summary(),
-            "mobile_inspection": mobile_inspection()}
+    return {"pilot": "evaluated", "pilot_receipt": str(path), "models": models, "primary": primary,
+            "mobile_inspection": mobile_inspection(), "witness_transfer": witness_transfer(),
+            "matched_compact_controls": compact, "exploratory_delivery_delay": delivery}
 
 
 def recorded_physical(data):

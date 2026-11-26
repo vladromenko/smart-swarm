@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from rehearse_physical_story_recovery import PILOT, native_fixture
+from rehearse_physical_story_recovery import NATIVE_FIXTURE, PILOT
 from smart_swarm.cli import settings
 from smart_swarm.contract import time_at
 from smart_swarm.episode import LABELS, TRUTH, atomic, rows, sha
@@ -108,7 +108,7 @@ def main():
     if args.output.exists():
         raise ValueError("Choose a new technical annotation rehearsal receipt")
     config = settings()
-    source = native_fixture(config)
+    source = config["studio_project"] / NATIVE_FIXTURE
     proof = validate_story_episode(config, source, technical=True)
     with TemporaryDirectory(prefix="smart-swarm-native-event-review-") as directory:
         cases = {family: case(config, source, proof, Path(directory) / family, family) for family in ("F3", "F6")}

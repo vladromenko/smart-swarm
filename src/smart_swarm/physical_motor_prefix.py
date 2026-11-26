@@ -11,6 +11,8 @@ from .studio import recorded_calibration
 CAMERA_ORDER = ("wrist", "top")
 MOTOR_FAMILIES = ("F1", "F3", "F4", "F5")
 MINIMUM_PREFIX_ROWS = 30
+RECORDED_EXPORT_FIELDS = ("source", "technical_only", "source_frame_manifest_sha256", "live_calibration_snapshot_hashes",
+                          "camera_keys", "joint_units", "action_semantics", "source_task", "nominal_fps")
 
 
 def episode_directory(config, state):
@@ -38,12 +40,16 @@ def prefix_bounds(observations, first_ns, last_ns):
     return begin, stop
 
 
+def placement_boundary(family):
+    return "insertion_closed" if family == "F3" else "placement_closed"
+
+
 def segment_choice(config, state):
     card = state["card"]
     family = card["family"]
     if family not in MOTOR_FAMILIES:
         return None, "story family does not admit a useful placement prefix"
-    boundary = "insertion_closed" if family == "F3" else "placement_closed"
+    boundary = placement_boundary(family)
     mark = state["markers"][boundary]
     if mark["observed_placement_outcome"] != "placement_succeeded":
         return None, "no observed successful placement at the prefix boundary"
@@ -89,7 +95,7 @@ def export_storage_digest(export):
 
 
 def official_prefix(export, episode, begin, stop, *, technical=False, storage_digest=None):
-    export, episode = Path(export).resolve(), Path(episode).resolve()
+    export, episode = Path(export).absolute(), Path(episode).resolve()
     metadata = load(export / "provenance/export.json")
     root = Path(metadata["source_path"]).resolve()
     relative = episode.relative_to(root).as_posix()
@@ -125,6 +131,30 @@ def official_prefix(export, episode, begin, stop, *, technical=False, storage_di
             "source": admitted_source, "technical_only": technical, "future_actions_stop_exclusive": first + stop}
 
 
+def store_prefix(trial, choice, binding):
+    path = trial / "motor-segment.json"
+    replacement = {**choice, "native_export": binding}
+    if path.is_file():
+        previous = load(path)
+        if previous == replacement:
+            return
+        observed = {key: value for key, value in previous.items() if key != "native_export"}
+        if observed != choice:
+            raise ValueError("The replacement export changed the witnessed placement range or source group")
+        prior_export = previous["native_export"]
+        if any(prior_export.get(key) != binding.get(key) for key in RECORDED_EXPORT_FIELDS):
+            raise ValueError("The replacement export changed the recorded calibration or action contract")
+        history = trial / "motor-segment-history"
+        history.mkdir(exist_ok=True)
+        digest = sha(path)
+        retained = history / f"{digest}.json"
+        if not retained.is_file():
+            retained.hardlink_to(path)
+        if sha(retained) != digest:
+            raise ValueError("The original motor receipt history changed")
+    atomic(path, replacement)
+
+
 def save_prefix(config, trial, state, export, *, storage_digest=None):
     rejection = None
     try:
@@ -137,7 +167,7 @@ def save_prefix(config, trial, state, export, *, storage_digest=None):
                 raise ValueError("The native placement has changed since story validation")
             binding = official_prefix(export, episode, choice["episode_row_start"],
                                       choice["episode_row_stop_exclusive"], storage_digest=storage_digest)
-            atomic(trial / "motor-segment.json", {**choice, "native_export": binding})
+            store_prefix(trial, choice, binding)
     except (OSError, ValueError, KeyError) as error:
         rejection = str(error)
     if rejection is not None:

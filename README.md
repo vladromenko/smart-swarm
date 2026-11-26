@@ -29,10 +29,12 @@ The operator guide covers the four-attempt SO101 component pilot and the distinc
 
 ## Research and results
 
-The independent simulation uses 100 source worlds and reports seven methods at three team sizes. The paper describes causal input isolation, the event-only and event-plus-reveal models, and the distinction between simulated outcomes and physical verification. The publication includes source code, tests, configuration templates, the synthetic contract fixture, documentation, and selected research figures. Raw recordings, dataset exports, complete evaluation receipts, model weights, and local service configuration are stored on the research host.
+The independent simulation uses 100 source worlds and reports seven methods at three team sizes. The paper describes causal input isolation, the event-only and event-plus-reveal models, and the status of physical verification. The publication includes source code, tests, configuration templates, the synthetic contract fixture, and simulation result tables and figures. The research host retains the complete evaluation bundle, raw recordings, model weights, and local service configuration.
 
-- [Paper draft](docs/PAPER_DRAFT.md)
+- [Paper draft PDF](docs/PAPER_DRAFT.pdf) · [Markdown](docs/PAPER_DRAFT.md)
 - [Independent simulation results](docs/PRIMARY_RESULTS_INDEPENDENT.md)
+- [Machine-readable simulation table](evidence/learning-pilot-v3/primary-method-table-test.json)
+- [Matched communication controls](docs/PRIMARY_MATCHED_COMPACT_RESULTS.md)
 - [Research protocol](docs/RESEARCH_PROTOCOL.md)
 - [Claims and limitations](docs/CLAIMS_AND_LIMITATIONS.md)
 - [Reuse and model assets](docs/REUSE_MAP.md)

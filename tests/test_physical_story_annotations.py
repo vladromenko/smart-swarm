@@ -191,7 +191,7 @@ def test_wrong_phase_hidden_window_and_unverified_slot_reference_refused(tmp_pat
 def test_f3_records_four_distinct_samples_on_both_sides_of_insertion_marker():
     source = [{"observation_timestamp_ns": value} for value in range(2, 20)]
     state = {"card": {"family": "F3"}, "markers": {"insertion_closed": {"monotonic_ns": 10}}}
-    frames = placement_samples(source, state, False)
+    frames = placement_samples(source, state)
     assert len(frames) == len({row["observation_timestamp_ns"] for row in frames}) == 8
     assert frames[3]["observation_timestamp_ns"] == 10
     assert frames[4]["observation_timestamp_ns"] == 11

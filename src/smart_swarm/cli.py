@@ -141,17 +141,22 @@ def add_resume_commands(sub):
 
 def add_operator_commands(sub):
     pilot = sub.add_parser("pilot", help="Attended SO101 pilot workflow using native Studio")
-    pilot.add_argument("--print-card", action="store_true")
+    view = pilot.add_mutually_exclusive_group()
+    view.add_argument("--print-card", action="store_true")
+    view.add_argument("--framing", action="store_true", help="Save two idle native preview images for setup review")
+    view.add_argument("--attended-check", action="store_true", help="Record the attended setup and native STOP check")
+    view.add_argument("--readiness", action="store_true", help="Check SO101-only readiness without querying Explorer")
     sub.add_parser("rehearse-native", help="Re-export existing Studio technical recordings and consume them")
     sub.add_parser("execution-handoff", help="Record ACT simulation and fixture execution eligibility")
     team = sub.add_parser("native-team", help="Check fleet readiness and optionally read private archives")
     team.add_argument("--capture-id")
     story = sub.add_parser("story-recording", help="Operate the attended distributed story workflow")
-    story.add_argument("stage", choices=("plan", "status", "readiness", "evidence-dataset", "evidence-score",
-                                         "motor-dataset", "review-motor", "begin",
+    story.add_argument("stage", choices=("plan", "status", "readiness", "evidence-dataset", "evidence-score", "evidence-report",
+                                         "motor-dataset", "review-motor", "begin", "close-incomplete",
                                          "insertion-closed", "placement-closed", "relocation-closed", "predict", "reveal",
                                          "annotation-proposals", "annotate"))
     story.add_argument("--card")
+    story.add_argument("--reason", help="Observed interruption when closing an incomplete story")
     story.add_argument("--assistance", choices=("none", "unknown", "human_relocation", "attended_native_motion", "human_hand_assistance"))
     story.add_argument("--placement-outcome", choices=("placement_succeeded", "placement_failed", "unknown"))
     story.add_argument("--observed-change", choices=("confirmed", "different", "unknown"))
@@ -159,6 +164,8 @@ def add_operator_commands(sub):
                        default="unknown")
     story.add_argument("--relations-preserved", action="store_true")
     story.add_argument("--annotation-file", type=Path)
+    story.add_argument("--package", type=Path, help="Verify an existing evidence-report package")
+    story.add_argument("--probe-mobile", action="store_true", help="Check native mobile observation routes during readiness")
     infer = sub.add_parser("evidence-predict", help="Replay a trained evidence checkpoint through the private scopes")
     infer.add_argument("--run", type=Path, required=True)
     infer.add_argument("--checkpoint", type=Path, required=True)
@@ -182,10 +189,11 @@ def add_motor_commands(sub):
     export.add_argument("--source", type=Path)
     export.add_argument("--output", type=Path)
     export.add_argument("--clocked", action="store_true", help="Use the aligned target cue and local issue index")
-    train = sub.add_parser("train", help="Run the bounded CPU LeRobot profile")
+    train = sub.add_parser("train", help="Run the bounded LeRobot profile on an admitted device")
     train.add_argument("--recipe", required=True, choices=["act-pilot", "smolvla-pilot",
                                                           "act-pipeline", "smolvla-pipeline"])
     train.add_argument("--dataset", type=Path)
+    train.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     evaluation = sub.add_parser("evaluate", help="Run offline and closed-loop MuJoCo motor checks")
     evaluation.add_argument("--protocol", choices=["motor-pilot"], required=True)
     evaluation.add_argument("--checkpoint", type=Path, required=True)
@@ -197,6 +205,7 @@ def add_motor_commands(sub):
                             default="aligned-sample-v2")
     evaluation.add_argument("--seed-start", type=int, default=31_000)
     evaluation.add_argument("--gpu-render", action="store_true", help="Request the native graphics lease for MuJoCo only")
+    evaluation.add_argument("--device", choices=("cpu", "cuda"), default="cpu", help="Select the policy compute device")
 
 def dispatch(config, args):
     if args.command == "doctor":
@@ -221,9 +230,7 @@ def dispatch(config, args):
 
 def operator_command(config, args):
     if args.command == "pilot":
-        from .operator import run
-
-        return run(config, print_card=args.print_card)
+        return pilot_command(config, args)
     if args.command == "rehearse-native":
         from .studio import replay_existing
 
@@ -248,46 +255,85 @@ def operator_command(config, args):
     return evidence_command(config, args)
 
 
+def pilot_command(config, args):
+    from .attended_so101 import pilot_readiness, record_attended
+    from .operator import run
+    from .physical_framing import capture_framing
+
+    if args.framing:
+        return capture_framing(config)
+    if args.attended_check:
+        return record_attended(config)
+    if args.readiness:
+        return pilot_readiness(config)
+    return run(config, print_card=args.print_card)
+
+
+def story_datasets(config, args):
+    if args.stage in ("evidence-dataset", "evidence-score"):
+        from .physical_evidence_dataset import publish
+        from .physical_evidence_score import score_current
+
+        return score_current(config) if args.stage == "evidence-score" else publish(config)
+    if args.stage == "evidence-report":
+        from .physical_paper import publish_report, verify
+
+        return verify(args.package) if args.package else publish_report(config)
+    from .physical_motor_dataset import publish
+    from .physical_story_motor import review_pending_motor
+
+    if args.stage == "review-motor":
+        from .physical_story_review import publish_ready
+
+        review, corpus = review_pending_motor(config), publish(config)
+        publish_ready(config, motors=corpus, refresh=review["attempted"] > 0)
+        return {"review": review, "corpus": corpus}
+    return publish(config)
+
+
+def refresh_story_reports(config, result):
+    from .physical_story_review import publish_ready
+
+    publish_ready(config, refresh=True)
+    return result
+
+
 def story_recording(config, args):
     from .physical_story_plan import prepare
-    from .physical_story_source import begin, mark, story_progress, story_readiness
+    from .physical_story_source import begin, mark, story_progress, story_readiness, story_readiness_with_transport
+    if args.package is not None and args.stage != "evidence-report":
+        raise ValueError("Use --package with story-recording evidence-report")
+    if args.probe_mobile and args.stage != "readiness":
+        raise ValueError("Use --probe-mobile with story-recording readiness")
     if args.stage == "plan":
         return prepare(config)
     if args.stage == "status":
         return story_progress(config)
     if args.stage == "readiness":
-        return story_readiness(config)
-    if args.stage in ("evidence-dataset", "evidence-score"):
-        from .physical_evidence_dataset import publish
-        from .physical_evidence_score import score_current
-        return score_current(config) if args.stage == "evidence-score" else publish(config)
-    if args.stage == "motor-dataset":
-        from .physical_motor_dataset import publish
-
-        return publish(config)
-    if args.stage == "review-motor":
-        from .physical_motor_dataset import publish
-        from .physical_story_motor import review_pending_motor
-
-        return {"review": review_pending_motor(config), "corpus": publish(config)}
+        return story_readiness_with_transport(config) if args.probe_mobile else story_readiness(config)
+    if args.stage in ("evidence-dataset", "evidence-score", "evidence-report", "motor-dataset", "review-motor"):
+        return story_datasets(config, args)
     if args.card is None:
         raise ValueError("Select a physical story card from story-recording plan")
     if args.stage in ("annotation-proposals", "annotate"):
         from .physical_story_annotations import annotation_action
         if args.stage == "annotation-proposals" and args.annotation_file is not None:
             raise ValueError("Use annotate to confirm scoped event labels")
-        return annotation_action(config, args.card, args.annotation_file,
-                                 interactive=args.stage == "annotate" and args.annotation_file is None)
+        result = annotation_action(config, args.card, args.annotation_file,
+                                   interactive=args.stage == "annotate" and args.annotation_file is None)
+        return refresh_story_reports(config, result) if result.get("saved_receipt") else result
     if args.stage == "begin":
         return begin(config, args.card)
     if args.stage in ("insertion-closed", "placement-closed", "relocation-closed"):
         return mark(config, args.card, args.stage.replace("-", "_"), assistance=args.assistance,
                     placement_outcome=args.placement_outcome, observed_change=args.observed_change)
-    from .physical_story_replay import predict_selected, terminal_reveal
+    from .physical_story_replay import close_interrupted_story, predict_selected, terminal_reveal
 
+    if args.stage == "close-incomplete":
+        return refresh_story_reports(config, close_interrupted_story(config, args.card, args.reason or ""))
     if args.stage == "predict":
         return predict_selected(config, args.card)
-    return terminal_reveal(config, args.card, args.outcome, args.relations_preserved)
+    return refresh_story_reports(config, terminal_reveal(config, args.card, args.outcome, args.relations_preserved))
 
 
 def evidence_command(config, args):
@@ -343,19 +389,21 @@ def motor_command(config, args):
                             visual_profile=args.visual_profile)
     if args.command == "evaluate":
         check_motor_graphics(args)
-        with admitted(config, "smart-swarm-evaluate-motor", gpu_render=args.gpu_render) as (grant, heartbeat):
+        device = getattr(args, "device", "cpu")
+        options = {"device": device} if device != "cpu" else {}
+        with admitted(config, "smart-swarm-evaluate-motor", gpu_render=args.gpu_render, **options) as (grant, heartbeat):
             configure_renderer(config, grant=grant)
             from .evaluate_motor import evaluate
 
             return evaluate(config["asset_root"], args.checkpoint.resolve(),
                             (args.dataset or root / "lerobot").resolve(), root / "evaluation-runs",
                             args.episodes, args.steps, args.wall_seconds, args.executor_profile, args.seed_start,
-                            heartbeat=heartbeat, reservation=grant)
+                            heartbeat=heartbeat, reservation=grant, **options)
     from .training import export_motor, train
 
     if args.command == "export-motor":
         return export_motor(args.source or root / "motor", args.output or root / "lerobot", clocked=args.clocked)
-    return train(args.recipe, args.dataset or root / "lerobot", root / "training-runs", config)
+    return train(args.recipe, args.dataset or root / "lerobot", root / "training-runs", config, device=args.device)
 
 
 def check_motor_graphics(args):

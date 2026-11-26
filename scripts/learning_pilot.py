@@ -27,6 +27,7 @@ MOTOR_CLOCK_FULL = WORK / "motor-clock-v4-full"
 MOTOR_CLOCK_SOURCE = WORK / "motor-clock-v4-fit-source"
 STORIES = WORK / "evidence-pilot-v3"
 GRAPHICS_STAGES = ("motor-data", "act-full", "smolvla-full")
+SAVED_DATA_STAGES = ("act-full", "smolvla-full", "story-learn")
 
 
 def fresh_resets():
@@ -122,7 +123,7 @@ def verified_export(source, output, option):
             lineage = load(path)
             raw = [load(p) for p in (source / split).glob("*/manifest.json")]
             match_visual(lineage, *raw)
-            observed = {row["source_world_episode_id"]: (row["source_sha256"], row["raw_path"])
+            observed = {row["source_world_episode_id"]: (row["source_sha256"], str(Path(row["raw_path"]).resolve()))
                         for row in lineage["episodes"]}
             if (lineage["input_profile"] != profile or observed != expected[split]
                     or len(observed) != len(lineage["episodes"]) or not lineage["episode_padding_mask_checked"]):
@@ -255,7 +256,8 @@ def invoke(config, stage, *, gpu_render=False):
 
         clocked = stage == "act-clock-fit"
         return run_fit(config, MOTOR_CLOCK_FIT if clocked else MOTOR_FIT, clocked=clocked)
-    with admitted(config, "smart-swarm-v3-" + stage, gpu_render=gpu_render) as (grant, heartbeat):
+    archive_only = stage in SAVED_DATA_STAGES and not gpu_render and bool(config.get("native_cpu_admission"))
+    with admitted(config, "smart-swarm-v3-" + stage, gpu_render=gpu_render, archive_only=archive_only) as (grant, heartbeat):
         configure_renderer(config, grant=grant)
         if stage == "motor-data":
             return motor_data(config, grant, heartbeat)

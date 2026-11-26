@@ -4,17 +4,21 @@ from bisect import bisect_right
 from collections import Counter
 from hashlib import sha256
 from itertools import accumulate
+import json
 from pathlib import Path
+import re
 
 from .contract import json_bytes
 from .episode import SPLITS, atomic, load, sha
-from .physical_motor_prefix import CAMERA_ORDER, NativePlacement, segment_choice
+from .physical_motor_prefix import CAMERA_ORDER, NativePlacement, export_storage_digest, segment_choice
+from .studio import DATASET_PATTERN, reject_export_storage, rejected_native_exports
+from .studio_export_storage import checked_export_path
 
 SCHEMA = "smart-swarm-native-motor-prefixes-v1"
 CAMERA_KEYS = tuple(f"observation.images.{name}" for name in CAMERA_ORDER)
 
 
-def admitted_segment(config, trial, card, intake):
+def admitted_segment(config, trial, card, intake, verified_storage):
     if intake.get("segment") != "motor-segment.json":
         raise ValueError("Unrecognized native placement receipt")
     candidate = load(trial / intake["segment"])
@@ -25,20 +29,44 @@ def admitted_segment(config, trial, card, intake):
     if expected is None or any(candidate.get(key) != value for key, value in expected.items()):
         raise ValueError(reason or "Physical placement range no longer fits its observed boundary")
     binding = candidate["native_export"]
-    export = Path(binding["path"]).resolve()
-    studio_exports = config["studio_project"].resolve() / "runtime/smart-swarm-pilot-exports"
-    if not export.is_relative_to(studio_exports):
-        raise ValueError("The referenced export is outside the native Smart Swarm export directory")
+    original = Path(binding["path"])
+    dataset = journal["studio_dataset_id"]
+    if not re.fullmatch(DATASET_PATTERN, dataset):
+        raise ValueError("Motor prefix review requires a native Studio dataset ID")
+    cache = trial.parent / "_native-exports" / dataset
+    refusal = rejected_native_exports(cache).get(str(original))
+    if refusal is not None:
+        raise ValueError(refusal)
+    export = checked_export_path(config, original)
     if binding["source_frame_manifest_sha256"] != candidate["native_frame_manifest_sha256"]:
         raise ValueError("Native frame identity disagrees between raw and exported placement")
-    meta = export / "provenance/export.json"
-    metadata = load(meta)
-    if (binding["export_metadata_sha256"] != sha(meta) or metadata["status"] != "complete"
-            or metadata["source"] != "hardware" or metadata["test_only"]
+    metadata = verified_export_metadata(cache, original, export, binding["export_metadata_sha256"])
+    if (metadata["status"] != "complete" or metadata["source"] != "hardware" or metadata["test_only"]
             or metadata["dataset_sha256"] != binding["dataset_sha256"] or metadata["repo_id"] != binding["repo_id"]):
         raise ValueError("The original Studio export changed or is ineligible for physical data")
     check_segments([candidate], technical=False)
+    check_export_storage(verified_storage, cache, original, export, binding.get("export_storage_sha256"))
     return candidate
+
+
+def verified_export_metadata(cache, original, export, expected):
+    meta = export / "provenance/export.json"
+    contents = meta.read_bytes()
+    actual = sha256(contents).hexdigest()
+    if actual != expected:
+        reject_export_storage(cache, original, expected, actual, material="provenance/export.json")
+        raise ValueError("Native export data or metadata bytes changed")
+    return json.loads(contents)
+
+
+def check_export_storage(verified, cache, original, export, expected):
+    if expected is not None:
+        if export not in verified:
+            verified[export] = export_storage_digest(export)
+        actual = verified[export]
+        if actual != expected:
+            reject_export_storage(cache, original, expected, actual)
+            raise ValueError("Native export data or metadata bytes changed")
 
 
 def check_segments(segments, *, technical):
@@ -70,6 +98,7 @@ def inventory(config, workspace, cards):
     segments, rejected = [], []
     seen = set()
     splits = {}
+    verified_storage = {}
     for card in cards:
         trial = workspace / card["story_id"]
         if (trial / "trial.json").is_file():
@@ -77,7 +106,7 @@ def inventory(config, workspace, cards):
                 path = trial / "motor-intake.json"
                 intake = load(path) if path.is_file() else {"status": "not_reviewed"}
                 if intake["status"] == "reviewable_prefix":
-                    segment = admitted_segment(config, trial, card, intake)
+                    segment = admitted_segment(config, trial, card, intake, verified_storage)
                     register_source(segment, seen, splits)
                     segments.append(segment)
                 else:

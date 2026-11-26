@@ -38,13 +38,3 @@ def prepare(config):
                         "link_recordings_by": "native source IDs and explicit timestamped boundaries",
                         "physical_story_count": 0})
     return {"plan_path": str(target), **load(target)}
-
-
-def show(config):
-    plan = prepare(config)
-    print(f"\n{plan['title']}\nPrepared {plan['blocks']} blocks of {plan['cards_per_block']} stories.")
-    print(f"{plan['plan_path']}")
-    for row in plan["cards"][:plan["cards_per_block"]]:
-        print(f"\n{row['family']} · {row['task']} · carrier station {row['requested_carrier_destination']}")
-        for field in ("placement", "relocation", "withheld", "query_boundary", "reveal_boundary"):
-            print(f"  {row[field]}")

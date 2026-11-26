@@ -84,7 +84,8 @@ def run(root):
                for ad in window[2] if ad["factor"] == "association"}
     backbone = load_backbone(study)
     heads = {kind: score(root, window, backbone, markers, models[kind], profile["fits"][kind], reference) for kind in HEADS}
-    report = {"schema": SCHEMA, "policy": METHOD, "permitted_input_sha256": window_digest(manifest, packets(root, manifest)),
+    digest = window_digest(manifest, packets(root, manifest), projected=True)
+    report = {"schema": SCHEMA, "policy": METHOD, "permitted_input_sha256": digest,
               "profiles_sha256": sha(PROFILE), "encoder_sha256": profile["encoder_sha256"],
               "marker_support_by_witness": markers, "modeled_reply_window_ns": window[1] - window[0], "heads": heads}
     if reference is not None:

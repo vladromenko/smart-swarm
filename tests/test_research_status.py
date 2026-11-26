@@ -1,5 +1,5 @@
 from smart_swarm.episode import atomic
-from smart_swarm.research_status import capture_counts, current_worker, primary_workers
+from smart_swarm.research_status import capture_counts, current_worker, motor_evaluation_progress, primary_workers
 
 
 def worker(proc, project, pid, argv, state="R"):
@@ -49,3 +49,25 @@ def test_only_independent_capture_groups_bound_to_release_are_counted(tmp_path):
     counts, unique = capture_counts(tmp_path, {"f1", "f2"}, "released")
     assert counts == {"accepted": 2, "running": 1, "outside_release": 2, "unreadable_receipt": 1}
     assert unique == 1
+
+
+def test_fresh_checkpoint_progress_requires_the_saved_validation_choice(tmp_path):
+    checkpoint = str(tmp_path / "training/checkpoints/000085/pretrained_model")
+    validation = {"checkpoint": checkpoint, "successful_resets": 0, "offline_validation_mean_loss": 0.44,
+                  "resets": [{"seed": i} for i in range(20)]}
+    receipt = tmp_path / "fresh/run/evaluation.json"
+    receipt.parent.mkdir(parents=True)
+    record = {"checkpoint": checkpoint, "evaluation_role": "fresh-test", "status": "evaluating", "requested_resets": 20,
+              "results": [{"contact_valid_placement": False}]}
+    atomic(receipt, record)
+    assert motor_evaluation_progress(tmp_path, {})["selected_checkpoint"] is None
+
+    atomic(tmp_path / "validation-choices.json", [validation])
+    report = motor_evaluation_progress(tmp_path, {})
+    assert report["selected_checkpoint"] == checkpoint
+    assert report["completed_validation_candidates"] == [
+        {"checkpoint": checkpoint, "successful_resets": 0, "offline_validation_mean_loss": 0.44, "resets": 20}]
+    assert report["fresh_evaluations"] == [{"checkpoint": checkpoint, "status": "evaluating", "requested_resets": 20,
+                                           "receipt": str(receipt), "completed_resets": 1}]
+    atomic(receipt, {**record, "checkpoint": "different"})
+    assert motor_evaluation_progress(tmp_path, {})["selected_checkpoint"] is None

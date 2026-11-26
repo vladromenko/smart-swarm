@@ -2,17 +2,18 @@
 
 import hashlib
 import json
+import math
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 import re
 
 from .contract import ProtocolError
+from .physical_fleet_timing import MAX_CLOCK_MS as MAX_LIVE_CLOCK_UNCERTAINTY_MS, clock_boot, clock_radius
 from .platform_client import NoRedirect
 from .studio import native_status
 
 ROLES = {"tank-1": "tank", "rosmaster-1": "rosmaster"}
 MAX_LIVE_RGB_AGE_S = 1.0
-MAX_LIVE_CLOCK_UNCERTAINTY_MS = 50.0
 
 
 def fetch(config, endpoint):
@@ -31,22 +32,33 @@ def data(config, endpoint):
 def rgb_readiness(fleet):
     issues = []
     roles = {}
-    if fleet.get("running") is not True or fleet.get("read_only") is not True:
+    if fleet.get("running") is not True or fleet.get("read_only") is not True or fleet.get("motion_commands_sent") != 0:
         issues.append("The native read-only observation hub is unavailable")
     for role in ROLES.values():
         row = fleet.get("robots", {}).get(role, {})
         age = row.get("ages_s", {}).get("rgb")
         uncertainty = row.get("uncertainty_ms")
-        camera_ok = type(age) in (float, int) and 0 <= age <= MAX_LIVE_RGB_AGE_S
-        clock_ok = type(uncertainty) in (float, int) and 0 <= uncertainty <= MAX_LIVE_CLOCK_UNCERTAINTY_MS
+        conversion = row.get("conversion_errors", {}).get("rgb")
+        camera_ok = type(age) in (float, int) and 0 <= age <= MAX_LIVE_RGB_AGE_S and not conversion
+        clock_issue = None
+        try:
+            clock_boot(role, fleet)
+            clock_radius(role, fleet)
+        except ValueError as error:
+            clock_issue = str(error)
         if row.get("error"):
             issues.append(f"{role}: {row['error']}")
         if not camera_ok:
             issues.append(f"{role}: no fresh native RGB sample")
-        if not clock_ok:
+        if conversion:
+            issues.append(f"{role}: native RGB conversion failed ({conversion})")
+        if clock_issue:
             issues.append(f"{role}: no native clock estimate within {MAX_LIVE_CLOCK_UNCERTAINTY_MS:g} ms")
         roles[role] = {"rgb_age_s": age, "clock_uncertainty_ms": uncertainty,
-                       "rgb_fresh": camera_ok, "clock_within_limit": clock_ok, "source_error": row.get("error")}
+                       "rgb_fresh": camera_ok, "clock_within_limit": clock_issue is None, "source_error": row.get("error"),
+                       "clock_issue": clock_issue, "rgb_conversion_error": conversion,
+                       "rgb_source_timestamp_ns": row.get("source_stamps_ns", {}).get("rgb"),
+                       "rgb_source_frame": row.get("source_frames", {}).get("rgb")}
     return {"ready": not issues, "issues": issues, "roles": roles}
 
 
@@ -58,6 +70,23 @@ def rosmaster_status(config):
         return error.code
 
 
+def capture_volume(records):
+    samples = []
+    for row in records:
+        duration, size = row.get("duration_s"), row.get("bytes_serialized")
+        if (row.get("phase") == "complete" and row.get("readback", {}).get("passed")
+                and set(ROLES.values()) <= set(row.get("observed_robots", []))
+                and type(duration) in (float, int) and math.isfinite(duration) and duration >= 30.
+                and type(size) is int and size > 0):
+            samples.append({"capture_id": row["id"], "duration_s": duration, "bytes_serialized": size})
+    if not samples:
+        return None
+    estimates = [round(row["bytes_serialized"] * 60 / row["duration_s"]) for row in samples]
+    return {"scope": "Payload estimate from completed native dual-robot archives",
+            "archive_count": len(samples), "reference_archives": samples,
+            "estimated_60s_payload_bytes": [min(estimates), max(estimates)], "native_free_floor_bytes": 1024**3}
+
+
 def native_team_status(config, *, probe_rosmaster=True):
     fleet = data(config, "/api/fleet/live")
     captures = data(config, "/api/fleet/captures")
@@ -67,6 +96,7 @@ def native_team_status(config, *, probe_rosmaster=True):
             "sensor_join_issues": fleet["readiness"]["problems"],
             "rosmaster_observation_http_status": rosmaster_status(config) if probe_rosmaster else None,
             "active_native_capture": captures["active"],
+            "capture_volume_reference": capture_volume(captures["records"]),
             "available_native_captures": [{"id": row["id"], "phase": row["phase"]}
                                           for row in captures["records"]],
             "physical_team_verified": False, "native_motion_requested": False}

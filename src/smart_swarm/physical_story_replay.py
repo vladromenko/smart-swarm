@@ -12,16 +12,15 @@ from .fleet_adapter import FleetArchive
 from .memory import QUERY, deliver, predict
 from .physical_fleet_timing import (HOME_MARGIN_NS, MAX_CLOCK_MS, FleetClock, PhysicalStoryRecorder,
                                     eligible_frames, wall_offset)
-from .physical_learned import inference as learned_inference, verify_optional as verify_learned_prediction
-from .physical_motor_prefix import CAMERA_ORDER as ARM_CAMERAS, episode_directory, segment_choice
+from .physical_learned import inference as learned_inference, offline_seal, verify_optional as verify_learned_prediction
+from .physical_motor_prefix import CAMERA_ORDER as ARM_CAMERAS, episode_directory, placement_boundary, segment_choice
 from .physical_reveal import FIELD as REVEAL_FIELD, PROFILE as REVEAL_PROFILE, capture_clip, store_clip, validate_sealed_clip
 from .physical_slot_reference import SCOPE_FLAG, adapt_rule, slot_reference, verify_decision_reference
 from .physical_story_condition import PHASE_DIGEST, phase_digest, verify_phase_digest
-from .physical_story_source import (FLEET_TERMINAL, StudioEpisodeUnlinked, anchor, card_for, corresponding_native_episode,
-                                    fleet_manifest, homebrain_boot, restore_start, same_recording_boot, save_incomplete,
-                                    story_phases, story_workspace)
-from .research_jobs import native_idle
-from .studio import native_status, validate_story_episode
+from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, StudioEpisodeUnlinked, anchor, card_for, corresponding_native_episode,
+                                    fleet_manifest, homebrain_boot, mobile_phase_bounds, restore_start, same_recording_boot,
+                                    save_incomplete, story_phases, story_update, story_workspace)
+from .studio import native_controls_idle, native_status, validate_story_episode
 from .vision import insertion, relocation
 
 AGENTS = ("so101-1", "tank-1", "rosmaster-1")
@@ -59,24 +58,23 @@ def studio_clips(recorder, source, state):
         raise ValueError("The native manifest changed after episode validation")
     source_rows = [item for item in rows(manifest)
                    if lower <= item["observation_timestamp_ns"] <= upper]
+    if not source_rows:
+        raise ValueError("No valid native Studio observations in the declared placement window")
+    if state["card"]["family"] == "F6":
+        return [(recorder.capture(AGENTS[0], {}, lower, [], []), {})]
     clips = []
-    hidden = state["card"]["family"] == "F6"
-    for item in placement_samples(source_rows, state, hidden):
-        frames = {f"so101-1/{key}": item["cameras"][key] for key in ARM_CAMERAS} if not hidden else {}
+    for item in placement_samples(source_rows, state):
+        frames = {f"so101-1/{key}": item["cameras"][key] for key in ARM_CAMERAS}
         views = {name: native_picture(source, frame) for name, frame in frames.items()}
         times = {name: frame["timestamp_ns"] for name, frame in frames.items()}
-        measured = [] if hidden else item["observation.state"]
-        units = [] if hidden else ["degrees"] * 5 + ["percent_calibrated_range"]
+        measured = item["observation.state"]
+        units = ["degrees"] * 5 + ["percent_calibrated_range"]
         packet = recorder.capture(AGENTS[0], views, item["observation_timestamp_ns"], measured, units, exposures=times)
         clips.append((packet, views))
-    if not clips:
-        raise ValueError("No valid native Studio observations in the declared placement window")
     return clips
 
 
-def placement_samples(samples, state, hidden):
-    if hidden:
-        return samples[:1]
+def placement_samples(samples, state):
     if state["card"]["family"] == "F3":
         split = state["markers"]["insertion_closed"]["monotonic_ns"]
         first = [row for row in samples if row["observation_timestamp_ns"] <= split]
@@ -89,9 +87,8 @@ def fleet_clips(config, recorder, state, agent, through, fleet, audit, *, curren
     archive = FleetArchive(config, state["fleet_capture_id"], agent)
     start = state["start"]
     offset = wall_offset([start, *state["markers"].values(), current_anchor or anchor()])
-    low = state["markers"]["placement_closed"]["monotonic_ns"]
-    high = state["markers"]["relocation_closed"]["monotonic_ns"]
-    bounds = (low, high) if agent == AGENTS[1] else (high, through)
+    tank, receiver = mobile_phase_bounds(state, through)
+    bounds = tank if agent == AGENTS[1] else receiver
     clock = FleetClock(archive.role, fleet["initial_hub_status"], archive.clock_history())
     eligible, audit[agent] = eligible_frames(archive.packets(through_s=60), clock, offset, bounds)
     required = 8 if agent == AGENTS[1] else 1
@@ -108,8 +105,12 @@ def fleet_clips(config, recorder, state, agent, through, fleet, audit, *, curren
     return result
 
 
-def persist_decision(config, recorder, arm, tank, query):
-    learned = learned_inference(config, recorder, query)
+def persist_decision(config, recorder, arm, tank, query, *, evaluation_mode="online"):
+    if evaluation_mode == "blind_offline":
+        manifest = {**recorder.meta, "sample_counts": recorder.counts, "query_boundary": time_at(query, recorder.clock)}
+        learned = offline_seal(recorder.root, manifest)
+    else:
+        learned = learned_inference(config, recorder, query)
     return write_decision(recorder, arm, tank, query, anchor()["monotonic_ns"], learned)
 
 
@@ -158,7 +159,8 @@ def admit_sources(config, trial, state, through, fleet):
         arm = studio_clips(recorder, episode_directory(config, state), state)
         tank = fleet_clips(config, recorder, state, AGENTS[1], through, fleet, audit)
         fleet_clips(config, recorder, state, AGENTS[2], through, fleet, audit)
-        return persist_decision(config, recorder, arm, tank, through)
+        return persist_decision(config, recorder, arm, tank, through,
+                                evaluation_mode=state.get("evaluation_mode", "online"))
     except (ValueError, OSError, RuntimeError, KeyError, ProtocolError) as error:
         recorder.quarantine(str(error))
         raise
@@ -167,8 +169,8 @@ def admit_sources(config, trial, state, through, fleet):
             atomic(trial / "fleet-timing-audit.json", audit)
 
 
-def prepare_native_arm(config, trial, state):
-    boundary = "placement_closed" if "placement_closed" in state["markers"] else "insertion_closed"
+def prepare_native_arm(config, trial, state, *, motor_only=False):
+    boundary = placement_boundary(state["card"]["family"]) if motor_only else "placement_closed"
     row = corresponding_native_episode(config, state, boundary=boundary)
     location = episode_directory(config, {**state, "native_episode_id": row["id"]})
     proof = validate_story_episode(config, location)
@@ -201,23 +203,25 @@ def incomplete_result(state):
     return {"status": "incomplete", "reason": state["reason"], "motor_segment_admitted": state.get("motor_segment_admitted", False)}
 
 
-def capture_failure(fleet, missing):
+def capture_failure(fleet, missing, *, withheld=None):
     reasons = []
     if fleet["phase"] != "complete" or not fleet.get("readback", {}).get("passed"):
         reasons.append(fleet.get("error") or "Explorer native observation readback did not pass")
     if missing:
         reasons.append(f"Native capture ended before these phases were recorded: {', '.join(missing)}")
+    if withheld and "relocation_closed" in missing:
+        reasons.append(withheld)
     return ". ".join(reasons)
 
 
 def preserve_finished_prefix(config, trial, state, reason):
-    marker = "insertion_closed" if state["card"]["family"] == "F3" else "placement_closed"
+    marker = placement_boundary(state["card"]["family"])
     if marker not in state["markers"]:
         rejection = "no independently observed placement boundary"
         atomic(trial / "motor-intake.json", {"status": "excluded", "reason": rejection})
         return incomplete_story(trial, state, reason)
     try:
-        prepare_native_arm(config, trial, state)
+        prepare_native_arm(config, trial, state, motor_only=True)
     except (OSError, ValueError, RuntimeError, KeyError, ProtocolError) as error:
         record_arm_error(trial, error)
         reason = f"{reason}. Studio intake: {error}"
@@ -292,11 +296,14 @@ def recover_pending_prediction(trial, state):
     return decision
 
 
+@story_update
 def predict_selected(config, identifier):
     card_for(config, identifier)
     trial = story_workspace(config) / identifier
     state = restore_start(config, trial, load(trial / "trial.json"))
-    if state["status"] in ("recording", "pending_reveal") and not same_recording_boot(state):
+    if state["status"] in ("placement_recording", "recording", "pending_reveal") and not same_recording_boot(state):
+        if state["status"] == "placement_recording":
+            return preserve_finished_prefix(config, trial, state, "Homebrain rebooted before the mobile observation phase")
         if state["status"] == "recording":
             recover_pending_prediction(trial, state)
         return incomplete_story(trial, state, "Homebrain rebooted before recording and reveal completed")
@@ -304,17 +311,19 @@ def predict_selected(config, identifier):
         return state["decision"]
     if state["status"] == "incomplete":
         return incomplete_result(state)
+    if state["status"] == "placement_recording":
+        raise ValueError("Save and stop Studio, then resume this card in the launcher to start Explorer")
     if state["status"] != "recording":
         raise ValueError("Wait for the existing native capture to acknowledge start")
     saved = recover_pending_prediction(trial, state)
     if saved is not None:
         return saved
-    native_idle(native_status(config))
+    native_controls_idle(native_status(config))
     fleet = fleet_manifest(config, state["fleet_capture_id"])
     if fleet["phase"] not in FLEET_TERMINAL:
         raise ValueError("Wait for the existing Explorer capture and readback to finish")
     missing = [phase for phase in story_phases(state) if phase not in state["markers"]]
-    reason = capture_failure(fleet, missing)
+    reason = capture_failure(fleet, missing, withheld=state.get("relocation_prompt_withheld"))
     if reason:
         return preserve_finished_prefix(config, trial, state, reason)
     return project_ready(config, trial, state, fleet)
@@ -344,6 +353,7 @@ def recover_sealed_reveal(trial, state):
     return state
 
 
+@story_update
 def terminal_reveal(config, identifier, outcome, preserved):
     card_for(config, identifier)
     trial = story_workspace(config) / identifier
@@ -356,7 +366,7 @@ def terminal_reveal(config, identifier, outcome, preserved):
         return unverified_reveal(trial, state)
     if state["status"] != "pending_reveal" or outcome not in OUTCOMES or not preserved:
         raise ValueError("A saved prediction and confirmation of unchanged object relation are required")
-    native_idle(native_status(config))
+    native_controls_idle(native_status(config))
     recorder = Recorder.reopen_pending(trial / "private-replay")
     if recorder.clock != boot_clock():
         raise ValueError("Terminal reveal must use the same Homebrain boot clock")
@@ -366,7 +376,7 @@ def terminal_reveal(config, identifier, outcome, preserved):
             raise ValueError("The journal and the stored pre-reveal decision disagree")
     decision = int(state["decision"]["at"]["monotonic_ns"])
     samples = capture_clip(config, decision)
-    native_idle(native_status(config))
+    native_controls_idle(native_status(config))
     ts = store_clip(recorder, samples, decision, outcome)
     atomic(recorder.root / LABELS / "settled-event.jsonl", {"settled_placement": None, "relocation_assignment": None,
                     "intermediate_events": None, "terminal": outcome if outcome != "unknown" else None,
@@ -377,9 +387,54 @@ def terminal_reveal(config, identifier, outcome, preserved):
     return state
 
 
-def unverified_reveal(trial, state):
-    reason = "Operator could not confirm the queried object relation was unchanged until reveal"
+def unverified_reveal(trial, state, reason="Operator could not confirm the queried object relation was unchanged until reveal"):
     recorder = Recorder.reopen_pending(trial / "private-replay")
     recorder.quarantine(reason)
     incomplete_story(trial, state, reason)
     return state
+
+
+@story_update
+def recover_story(config, trial):
+    state = restore_start(config, trial, load(trial / "trial.json"))
+    if state["status"] == "recording":
+        recover_pending_prediction(trial, state)
+    return recover_sealed_reveal(trial, state)
+
+
+@story_update
+def close_interrupted_story(config, identifier, reason):
+    reason = reason.strip()
+    if not reason or len(reason) > 300 or not reason.isprintable():
+        raise ValueError("Give an observed interruption reason within 300 characters")
+    card_for(config, identifier)
+    trial = story_workspace(config) / identifier
+    journal = trial / "trial.json"
+    if not journal.is_file():
+        raise ValueError("Start a story before closing an interrupted attempt")
+    state = recover_sealed_reveal(trial, load(journal))
+    if state["status"] == "incomplete":
+        return incomplete_result(state)
+    if state["status"] == "complete":
+        raise ValueError("The story already has a sealed outcome")
+    if state["status"] not in ACTIVE_STORY_STATES:
+        raise ValueError("Only an interrupted active story may be closed as incomplete")
+    studio = native_status(config)
+    if any(studio.get(key) for key in ("recording_active", "teleoperation_active", "policy_active", "native_arm_hardware_open")):
+        raise ProtocolError("RESOURCE_BUSY", "Finish the current Studio recording and stop native control before closing this story")
+    state = restore_start(config, trial, state)
+    if state["status"] == "preparing":
+        raise ProtocolError("RESOURCE_BUSY", "The existing Explorer launch is still pending. Wait for its readback")
+    if state["status"] == "recording":
+        if fleet_manifest(config, state["fleet_capture_id"])["phase"] not in FLEET_TERMINAL:
+            raise ProtocolError("RESOURCE_BUSY", "Wait for the existing Explorer capture and readback to finish")
+        recover_pending_prediction(trial, state)
+        state = recover_sealed_reveal(trial, state)
+    if state["status"] == "complete":
+        raise ValueError("The story already has a sealed outcome")
+    if state["status"] == "incomplete":
+        return incomplete_result(state)
+    reason = f"Operator closed interrupted attempt. {reason}"
+    if state["status"] == "pending_reveal":
+        return incomplete_result(unverified_reveal(trial, state, reason))
+    return preserve_finished_prefix(config, trial, state, reason)

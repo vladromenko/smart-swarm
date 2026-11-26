@@ -1,11 +1,13 @@
-"""Fresh CPU process for checkpoint reload and scoped LeRobot inference."""
+"""Fresh process for checkpoint reload and scoped LeRobot inference."""
 
 import argparse
 from base64 import b64decode
 import json
 import os
 from pathlib import Path
+from resource import RUSAGE_SELF, getrusage
 import sys
+from time import monotonic_ns
 
 import numpy as np
 import torch
@@ -14,14 +16,29 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.utils.constants import ACTION
+from policy_runtime_device import verify_runtime
 
 
-def load_policy(checkpoint):
+def processor_devices(checkpoint, device):
+    settings = {}
+    for role, target in (("pre", device), ("post", "cpu")):
+        path = Path(checkpoint) / f"policy_{role}processor.json"
+        if path.is_file():
+            saved = json.loads(path.read_text())
+            if any(step.get("registry_name") == "device_processor" for step in saved["steps"]):
+                settings[f"{role}processor_overrides"] = {"device_processor": {"device": target}}
+    if device == "cuda" and "preprocessor_overrides" not in settings:
+        raise ValueError("The checkpoint has no explicit input device processor for CUDA evaluation")
+    return settings
+
+
+def load_policy(checkpoint, *, device="cpu"):
     config = PreTrainedConfig.from_pretrained(str(checkpoint))
-    config.device = "cpu"
+    config.device = device
     policy_type = get_policy_class(config.type)
-    policy = policy_type.from_pretrained(str(checkpoint), config=config, strict=True).to("cpu").float().eval()
-    processors = make_pre_post_processors(config, pretrained_path=str(checkpoint))
+    policy = policy_type.from_pretrained(str(checkpoint), config=config, strict=True).to(device).float().eval()
+    options = processor_devices(checkpoint, device)
+    processors = make_pre_post_processors(config, pretrained_path=str(checkpoint), **options)
     return config, policy, *processors
 
 
@@ -152,10 +169,60 @@ def conditioning(request, model, pre):
             "first_normalized_action_max_abs_difference": float((outputs[0][:, 0] - outputs[1][:, 0]).abs().max())}
 
 
-def serve(descriptor, checkpoint, validation, all_sources=False):
-    config, model, pre, post = load_policy(checkpoint)
+def memory_usage(device):
+    profile = {"peak_worker_rss_bytes": getrusage(RUSAGE_SELF).ru_maxrss * 1024}
+    if device == "cuda":
+        profile.update(cuda_peak_tensor_bytes=torch.cuda.max_memory_allocated(),
+                       cuda_peak_reserved_bytes=torch.cuda.max_memory_reserved())
+    return profile
+
+
+def startup_profile(config, runtime, load_ns):
+    return {**runtime, "policy": config.type, "model_and_processors_load_ns": load_ns,
+            "chunk_size": config.chunk_size, "actions_per_chunk": config.n_action_steps,
+            "diffusion_steps": getattr(config, "num_steps", None),
+            "resize_with_padding": getattr(config, "resize_imgs_with_padding", None)}
+
+
+def check_timing_inputs(root, windows):
+    dataset = LeRobotDataset("smart-swarm/train", root=root)
+    for row in windows:
+        sample = dataset[row["dataset_index"]]
+        batch = example_batch(row["payload"])
+        if (sample["episode_index"].item() != row["episode_index"] or sample["frame_index"].item() != row["issue"]
+                or batch["task"] != sample["task"]
+                or any(not torch.equal(val, sample[key]) for key, val in batch.items() if isinstance(val, torch.Tensor))):
+            raise ValueError(f"The timing input at issue {row['issue']} differs from the official training row")
+    return {"verified_training_rows": len(windows)}
+
+
+def timed_action(request, model, pre, post):
+    started = monotonic_ns()
+    preprocessor_ns = 0
+
+    def measured(batch):
+        nonlocal preprocessor_ns
+        before = monotonic_ns()
+        result = pre(batch)
+        preprocessor_ns += monotonic_ns() - before
+        return result
+
+    if request["type"] == "smolvla_chunk":
+        response = {"actions": smolvla_chunk(example_batch(request), model, measured, post)}
+    else:
+        response = {"action": step(request, model, measured, post)}
+    return {**response, "worker_host_preprocessor_ns": preprocessor_ns,
+            "worker_request_ns": monotonic_ns() - started}
+
+
+def serve(descriptor, checkpoint, validation, all_sources=False, *, device="cpu", timing_startup=False):
+    runtime = verify_runtime(device)
+    started = monotonic_ns()
+    config, model, pre, post = load_policy(checkpoint, device=device)
     with os.fdopen(descriptor, "w", buffering=1) as outbound:
-        print(json.dumps(heldout_loss(validation, config, model, pre, all_sources), allow_nan=False), file=outbound)
+        initial = (startup_profile(config, runtime, monotonic_ns() - started) if timing_startup else
+                   heldout_loss(validation, config, model, pre, all_sources))
+        print(json.dumps(initial, allow_nan=False), file=outbound)
         for line in sys.stdin:
             command = json.loads(line)
             if command["type"] == "reset":
@@ -163,6 +230,8 @@ def serve(descriptor, checkpoint, validation, all_sources=False):
                     torch.manual_seed(command["seed"])
                 model.reset()
                 print('{"reset": true}', file=outbound)
+            elif timing_startup and command["type"] in ("action", "smolvla_chunk"):
+                print(json.dumps(timed_action(command, model, pre, post), allow_nan=False), file=outbound)
             elif command["type"] == "action":
                 print(json.dumps({"action": step(command, model, pre, post)}, allow_nan=False), file=outbound)
             elif command["type"] == "smolvla_chunk":
@@ -175,6 +244,10 @@ def serve(descriptor, checkpoint, validation, all_sources=False):
                 print(json.dumps({"rows": result}, allow_nan=False), file=outbound)
             elif command["type"] == "audit_conditioning":
                 print(json.dumps(conditioning(command, model, pre), allow_nan=False), file=outbound)
+            elif command["type"] == "timing_stats" and timing_startup:
+                print(json.dumps(memory_usage(device), allow_nan=False), file=outbound)
+            elif command["type"] == "timing_inputs" and timing_startup:
+                print(json.dumps(check_timing_inputs(validation, command["windows"]), allow_nan=False), file=outbound)
             else:
                 raise ValueError("Invalid local worker command")
 
@@ -185,5 +258,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--validation", type=Path, required=True)
     parser.add_argument("--all-validation-sources", action="store_true")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--timing-startup", action="store_true")
     args = parser.parse_args()
-    serve(args.fd, args.checkpoint, args.validation, args.all_validation_sources)
+    serve(args.fd, args.checkpoint, args.validation, args.all_validation_sources,
+          device=args.device, timing_startup=args.timing_startup)

@@ -32,14 +32,19 @@ def clock_radius(role, native):
     return math.ceil(value * 1_000_000)
 
 
+def clock_boot(role, native):
+    boot = native.get("robots", {}).get(role, {}).get("boot_id")
+    if not isinstance(boot, str) or not boot:
+        raise ValueError(f"{role} lacks the initial native clock boot identity")
+    return boot
+
+
 class FleetClock:
     """Use nearby native status rows as well as the recording's initial boot identity."""
 
     def __init__(self, role, start, history):
         self.role = role
-        self.boot = start.get("robots", {}).get(role, {}).get("boot_id")
-        if not isinstance(self.boot, str) or not self.boot:
-            raise ValueError(f"{role} lacks the initial native clock boot identity")
+        self.boot = clock_boot(role, start)
         self.initial_radius_ns = clock_radius(role, start)
         self.rows = {}
         for row in history:

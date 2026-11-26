@@ -18,3 +18,5 @@ native_cpu_admission = true
 explorer_origin = "http://127.0.0.1:8030"
 explorer_project = "/path/to/explorer"
 explorer_python = "/path/to/explorer-venv/bin/python"
+# Optional mounted volume for closed native archives.
+# physical_archive_volume = "/path/to/secondary-archive-volume"

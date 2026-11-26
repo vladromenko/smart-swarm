@@ -1,6 +1,7 @@
-"""Invoke the official trainer with float32 model weights on this CPU."""
+"""Invoke the official trainer with the verified camera inputs and float32 policy weights."""
 
 from functools import wraps
+import os
 from pathlib import Path
 import shutil
 
@@ -43,9 +44,15 @@ def configure():
 
     @wraps(make_policy)
     def make_float_policy(cfg, **kwargs):
+        requested = os.environ.get("SMART_SWARM_TRAINING_DEVICE")
+        if requested and str(cfg.device).partition(":")[0] != requested:
+            raise RuntimeError("The native trainer changed the explicitly requested policy device")
         if cfg.type == "smolvla":
             bind_smol_inputs(cfg, kwargs["ds_meta"])
-        return make_policy(cfg=cfg, **kwargs).float()
+        policy = make_policy(cfg=cfg, **kwargs).float()
+        if requested and next(policy.parameters()).device.type != requested:
+            raise RuntimeError("The native trainer loaded the policy on another device")
+        return policy
 
     lerobot_train.make_policy = make_float_policy
     make_processors = lerobot_train.make_pre_post_processors
@@ -67,5 +74,8 @@ def configure():
 
 
 if __name__ == "__main__":
+    from policy_runtime_device import verify_runtime
+
+    verify_runtime(os.environ.get("SMART_SWARM_TRAINING_DEVICE", "cpu"))
     configure()
     lerobot_train.main()

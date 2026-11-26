@@ -39,7 +39,7 @@ def read_teacher(path):
     return manifest, arrays, camera
 
 
-def replay(world, arrays, profile):
+def replay(world, arrays, profile, *, contact_issues=range(0)):
     executor = ArmExecutor(world, profile)
     executor.prime()
     feedback, states, sample_times = [], [], []
@@ -48,7 +48,7 @@ def replay(world, arrays, profile):
             states.append(world.state(ARM)[0])
             sample_times.append(world.ns)
         executor.submit(asked)
-        if idx % 15 == 14:
+        if idx % 15 == 14 or idx in contact_issues:
             feedback.append(observe(world, idx + 1))
     result = summarize(feedback)
     if states:

@@ -58,15 +58,20 @@ def valid_snapshot(snapshot):
             and type(age) in (int, float) and 0 <= age < 500)
 
 
-def read_preview(config):
-    if config["studio_origin"] != "http://127.0.0.1:8020":
-        raise ValueError("Expected the native Homebrain preview on loopback")
-    request = Request(config["studio_origin"] + "/api/frame/top")
+def read_preview_jpeg(config, role):
+    if config["studio_origin"] != "http://127.0.0.1:8020" or role not in ("wrist", "top"):
+        raise ValueError("Expected a declared native Homebrain preview on loopback")
+    request = Request(config["studio_origin"] + f"/api/frame/{role}")
     opener = build_opener(ProxyHandler({}), NoRedirect())
     with opener.open(request, timeout=5) as response:
         contents = response.read(MAX_FRAME_BYTES + 1)
         if response.headers.get_content_type() != "image/jpeg" or not 0 < len(contents) <= MAX_FRAME_BYTES:
             raise ValueError("Studio returned an invalid bounded JPEG preview")
+    return contents
+
+
+def read_preview(config):
+    contents = read_preview_jpeg(config, "top")
     with Image.open(BytesIO(contents)) as image:
         if image.format != "JPEG":
             raise ValueError("Studio returned a preview with an invalid image format")

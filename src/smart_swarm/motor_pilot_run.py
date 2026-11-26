@@ -104,7 +104,7 @@ def run_fit(config, dataset, *, clocked=False):
     training = load(ROOT / "configs/training.json")
     prior = clock_fit_budget(training) if clocked else {"elapsed_s": 0, "optimizer_updates": 0}
     REPORT.mkdir(exist_ok=True, parents=True)
-    with admitted(config, root.name) as (grant, heartbeat):
+    with admitted(config, root.name, archive_only=bool(config.get("native_cpu_admission"))) as (grant, heartbeat):
         if destination.is_file():
             return load(destination)
         return run_fit_job(config, dataset, root, training, train, validation, grant, heartbeat,

@@ -1,5 +1,6 @@
 """Regression gates for the resumed software and experiment provenance."""
 
+from contextlib import contextmanager
 from pathlib import Path
 from subprocess import TimeoutExpired
 
@@ -7,7 +8,7 @@ import pytest
 
 from smart_swarm.cli import settings
 from smart_swarm.evidence_inputs import audit_b1
-from smart_swarm.episode import load
+from smart_swarm.episode import atomic, load, sha
 from smart_swarm.so101_pilot import classify
 from smart_swarm.studio import assign_attempts, status_for
 
@@ -26,6 +27,28 @@ def test_resume_descriptor_has_real_command_and_explicit_external_roots():
     assert (config["studio_project"] / "scripts/export_lerobot.py").is_file()
 
 
+@pytest.mark.parametrize(("native", "device", "archive_only"), [(True, "cpu", True), (True, "cuda", False), (False, "cpu", False)])
+def test_training_only_requests_cpu_lease_for_saved_data(monkeypatch, tmp_path, native, device, archive_only):
+    from smart_swarm import research_jobs, training
+    from smart_swarm.episode import atomic
+
+    for split in ("train", "validation"):
+        ledger = tmp_path / split / "smart-swarm-lineage.json"
+        ledger.parent.mkdir()
+        atomic(ledger, {"episodes": [{"split": split}]})
+
+    @contextmanager
+    def admitted(config, identifier, **options):
+        assert options == {"device": device, "archive_only": archive_only}
+        assert config["native_cpu_admission"] is native and identifier.startswith("act-pilot-")
+        yield {"scope": "fixture"}, lambda: None
+
+    monkeypatch.setattr(research_jobs, "admitted", admitted)
+    monkeypatch.setattr(training, "run_motor", lambda *args, **kwargs: args[6])
+    result = training.train("act-pilot", tmp_path, tmp_path / "runs", {"native_cpu_admission": native}, device=device)
+    assert result == {"scope": "fixture"}
+
+
 def test_attempt_ids_survive_quarantine_and_late_polling(tmp_path):
     entries = [{"id": "ep_second"}, {"id": "ep_first"}]
     original = assign_attempts(tmp_path, entries)
@@ -34,15 +57,24 @@ def test_attempt_ids_survive_quarantine_and_late_polling(tmp_path):
     assert extended == {**original, "ep_inline": 2}
 
 
+def write_finalized_test_episode(source, episode):
+    raw_episode = source / "episodes" / episode
+    raw_episode.mkdir(parents=True)
+    (raw_episode / "episode.json").write_text('{"status":"complete","frames":1}')
+    (raw_episode / "frames.jsonl").write_text("{}\n")
+
+
 def test_native_consumer_timeout_resumes_completed_export(monkeypatch, tmp_path):
     from smart_swarm import studio
 
     source = tmp_path / "native"
-    source.mkdir()
+    write_finalized_test_episode(source, "native1")
     (source / "dataset.json").write_text("{}")
     export = tmp_path / "export-v1"
     export.mkdir()
     calls = []
+    _, episodes = studio.native_export_snapshot(source)
+    validation = {"episodes": episodes}
 
     def generate(*_):
         calls.append("exported")
@@ -53,7 +85,7 @@ def test_native_consumer_timeout_resumes_completed_export(monkeypatch, tmp_path)
         calls.append("consumed")
         if calls.count("consumed") == 1:
             raise TimeoutExpired("consume", 160)
-        return {"validated": True}
+        return validation
 
     monkeypatch.setattr(studio, "export_native", generate)
     monkeypatch.setattr(studio, "consume_native", consume)
@@ -61,8 +93,160 @@ def test_native_consumer_timeout_resumes_completed_export(monkeypatch, tmp_path)
         studio.accepted_export({}, source, tmp_path)
     assert (tmp_path / "completed-native-export.json").is_file()
     assert not (tmp_path / "accepted-native-export.json").exists()
-    assert studio.accepted_export({}, source, tmp_path) == (export, {"validated": True})
+    assert studio.accepted_export({}, source, tmp_path) == (export, validation)
     assert calls == ["exported", "consumed", "consumed"]
+
+
+def test_native_export_refreshes_when_an_episode_appears_before_catalogue_update(monkeypatch, tmp_path):
+    from smart_swarm import studio
+
+    source = tmp_path / "native"
+    write_finalized_test_episode(source, "native1")
+    (source / "dataset.json").write_text("{}")
+    exported = {}
+
+    def generate(_, raw):
+        path = tmp_path / f"export-{len(exported) + 1}"
+        path.mkdir()
+        exported[path] = {"episodes": studio.native_export_snapshot(raw)[1]}
+        return path, {"status": "complete"}
+
+    monkeypatch.setattr(studio, "export_native", generate)
+    monkeypatch.setattr(studio, "consume_native", lambda config, raw, target: exported[target])
+    first, _ = studio.accepted_export({}, source, tmp_path)
+    before = load(tmp_path / "accepted-native-export.json")
+    write_finalized_test_episode(source, "native2")
+    second, validation = studio.accepted_export({}, source, tmp_path)
+    after = load(tmp_path / "accepted-native-export.json")
+    assert first != second
+    assert [row["episode_id"] for row in validation["episodes"]] == ["native1", "native2"]
+    assert before["source_manifest_sha256"] == after["source_manifest_sha256"]
+    assert before["source_episode_set_sha256"] != after["source_episode_set_sha256"]
+    assert studio.accepted_export({}, source, tmp_path) == (second, validation)
+    assert len(exported) == 2
+
+
+def test_rejected_native_cache_resumes_the_completed_replacement_after_timeout(monkeypatch, tmp_path):
+    from smart_swarm import studio
+    from smart_swarm.episode import atomic
+
+    source = tmp_path / "raw"
+    write_finalized_test_episode(source, "native1")
+    (source / "dataset.json").write_text("{}")
+    generation, episodes = studio.native_export_snapshot(source)
+    previous, replacement = tmp_path / "previous", tmp_path / "replacement"
+    previous.mkdir()
+    replacement.mkdir()
+    accepted = tmp_path / "accepted-native-export.json"
+    atomic(accepted, {**generation, "export": str(previous)})
+    calls = []
+
+    def consume(config, raw, target):
+        calls.append(target)
+        if target == previous:
+            raise studio.NativeExportMismatch("An interior native action changed")
+        if calls.count(replacement) == 1:
+            raise TimeoutExpired("consume", 160)
+        return {"episodes": episodes}
+
+    monkeypatch.setattr(studio, "consume_native", consume)
+    monkeypatch.setattr(studio, "export_native", lambda *_: (replacement, {}))
+    with pytest.raises(TimeoutExpired):
+        studio.accepted_export({}, source, tmp_path)
+    evidence = studio.rejection_path(tmp_path, generation, previous)
+    assert load(evidence)["reason"] == "An interior native action changed" and previous.is_dir()
+    assert load(accepted)["export"] == str(previous)
+    monkeypatch.setattr(studio, "export_native", lambda *_: pytest.fail("The completed replacement already exists"))
+    assert studio.accepted_export({}, source, tmp_path) == (replacement, {"episodes": episodes})
+    assert load(accepted)["export"] == str(replacement) and calls == [previous, replacement, replacement]
+
+
+def test_native_cache_does_not_replace_a_changing_recording(monkeypatch, tmp_path):
+    from smart_swarm import studio
+    from smart_swarm.contract import ProtocolError
+    from smart_swarm.episode import atomic
+
+    source = tmp_path / "raw"
+    write_finalized_test_episode(source, "native1")
+    (source / "dataset.json").write_text("{}")
+    generation, _ = studio.native_export_snapshot(source)
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    atomic(tmp_path / "accepted-native-export.json", {**generation, "export": str(previous)})
+
+    def consume(*_):
+        write_finalized_test_episode(source, "native2")
+        raise studio.NativeExportMismatch("Saved native episodes changed")
+
+    monkeypatch.setattr(studio, "consume_native", consume)
+    monkeypatch.setattr(studio, "export_native", lambda *_: pytest.fail("The raw generation is still changing"))
+    with pytest.raises(ProtocolError, match="Native recordings changed") as error:
+        studio.accepted_export({}, source, tmp_path)
+    assert error.value.retryable and not studio.rejection_path(tmp_path, generation, previous).exists()
+
+
+def test_native_consumer_runtime_failure_preserves_a_completed_export(monkeypatch, tmp_path):
+    from subprocess import CompletedProcess
+
+    from smart_swarm import studio
+    from smart_swarm.contract import ProtocolError
+
+    config = {"studio_project": tmp_path, "studio_python": "studio"}
+    monkeypatch.setattr(studio.subprocess, "run", lambda *args, **opts: CompletedProcess([], 1, stderr="ImportError"))
+    with pytest.raises(ProtocolError, match="did not run successfully") as error:
+        studio.consume_native(config, tmp_path, tmp_path)
+    assert error.value.retryable
+    monkeypatch.setattr(studio.subprocess, "run", lambda *args, **opts: CompletedProcess([], 0, stdout="{}"))
+    with pytest.raises(ProtocolError, match="incomplete receipt") as missing:
+        studio.consume_native(config, tmp_path, tmp_path)
+    assert missing.value.retryable
+    monkeypatch.setattr(studio.subprocess, "run", lambda *args, **opts: CompletedProcess([], 3, stderr="Invalid action"))
+    with pytest.raises(studio.NativeExportMismatch, match="Invalid action"):
+        studio.consume_native(config, tmp_path, tmp_path)
+
+
+def test_native_export_deadline_scales_with_saved_visual_work(monkeypatch, tmp_path):
+    from smart_swarm import studio
+    from smart_swarm.episode import atomic
+
+    ledger = [{"frames": 281}]
+    monkeypatch.setattr(studio, "native_export_snapshot", lambda _: ({}, ledger))
+    catalogue = tmp_path / "dataset.json"
+    atomic(catalogue, {"settings": {"camera_mode": "wrist_only"}})
+    assert studio.native_export_timeout(tmp_path) == 180
+    ledger[0]["frames"] = 1768
+    assert studio.native_export_timeout(tmp_path) == 281
+    atomic(catalogue, {"camera_mode": "two_camera"})
+    assert studio.native_export_timeout(tmp_path) == 502
+    ledger[0]["frames"] = 30_000
+    assert studio.native_export_timeout(tmp_path) == 1800
+
+
+def test_native_export_recovers_only_a_verified_publication_at_timeout(monkeypatch, tmp_path):
+    from smart_swarm import studio
+    from smart_swarm.episode import atomic, sha
+
+    raw = tmp_path / "raw"
+    write_finalized_test_episode(raw, "ep_1")
+    catalogue = raw / "dataset.json"
+    atomic(catalogue, {"camera_mode": "two_camera"})
+    config = {"studio_project": tmp_path, "studio_python": "studio-python"}
+    valid = [True]
+
+    def finish_at_timeout(command, **options):
+        output = Path(command[command.index("--output") + 1])
+        sidecar = output / "provenance/export.json"
+        sidecar.parent.mkdir(parents=True)
+        atomic(sidecar, {"status": "complete", "source_path": str(raw), "source_hashes": {"dataset.json": sha(catalogue)},
+                         "official_verification": {"rgb_pixels_bit_exact": valid[0]}})
+        raise TimeoutExpired(command, options["timeout"])
+
+    monkeypatch.setattr(studio.subprocess, "run", finish_at_timeout)
+    output, service = studio.export_native(config, raw)
+    assert service["recovered_after_native_timeout"] and service["path"] == str(output)
+    valid[0] = False
+    with pytest.raises(TimeoutExpired):
+        studio.export_native(config, raw)
 
 
 def test_motor_visual_profiles_keep_old_rgb_and_reject_mixing(tmp_path):
@@ -132,6 +316,32 @@ def test_full_motor_inventory_requires_independent_source_ids(monkeypatch, tmp_p
         full.actual_inventory(tmp_path)
 
 
+def test_verified_motor_export_retains_lineage_after_raw_archive_relocation(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    from learning_pilot import verified_export
+    from smart_swarm.episode import atomic
+    from smart_swarm.motor_input import CLOCKED_PROFILE
+
+    source, backup, export = (tmp_path / name for name in ("raw", "archived-raw", "export"))
+    for split in ("train", "validation"):
+        raw = source / split / f"episode-{split}"
+        raw.mkdir(parents=True)
+        atomic(raw / "manifest.json", {"sha256": split})
+        (export / split).mkdir(parents=True)
+        atomic(export / split / "smart-swarm-lineage.json", {"input_profile": CLOCKED_PROFILE,
+               "episode_padding_mask_checked": True, "episodes": [{"source_world_episode_id": raw.name,
+               "source_sha256": split, "raw_path": str(raw)}]})
+    source.rename(backup)
+    source.symlink_to(backup, target_is_directory=True)
+    assert verified_export(source, export, "--clocked")
+    lineage = export / "train/smart-swarm-lineage.json"
+    record = load(lineage)
+    record["episodes"][0]["raw_path"] = str(backup / "validation/episode-validation")
+    atomic(lineage, record)
+    with pytest.raises(ValueError, match="export lineage differs"):
+        verified_export(source, export, "--clocked")
+
+
 def test_motor_resume_checks_admission_before_each_new_attempt(monkeypatch, tmp_path):
     pytest.importorskip("mujoco")
     from smart_swarm import motor
@@ -152,23 +362,81 @@ def test_motor_resume_checks_admission_before_each_new_attempt(monkeypatch, tmp_
     assert result["status"] == "complete" and result["attempted"] == result["accepted"] == 3
 
 
-def test_pilot_outcome_prompt_selects_next_completed_attempt(monkeypatch, tmp_path):
+def pilot_outcome_fixture(monkeypatch, root):
+    from smart_swarm import studio
+    from smart_swarm.episode import atomic, sha
+
+    dataset = "ds_1234567890123456"
+    (root / "so101-pilot").mkdir()
+    entries = [{"id": "ep_1", "storage": "quarantine", "metadata": {"status": "incomplete"}}]
+    for index in range(2, 5):
+        episode = f"ep_{index}"
+        folder = root / "data" / dataset / "episodes" / episode
+        folder.mkdir(parents=True)
+        ledger = folder / "frames.jsonl"
+        ledger.write_text(f'{{"frame": {index}}}\n')
+        metadata = {"status": "complete", "frames": 1, "frames_sha256": sha(ledger),
+                    "finished_at": f"2026-11-26T14:15:16.00{index}+00:00"}
+        atomic(folder / "episode.json", metadata)
+        entries.append({"id": episode, "storage": "episodes", "metadata": metadata})
+    recorder = {"active": False, "state": "idle"}
+    monkeypatch.setattr(studio, "native_request", lambda cfg, uri: {"recording": recorder} if uri == "/api/status"
+                        else list(reversed(entries)))
+    monkeypatch.setattr(studio, "prepare", lambda cfg: {"attempt_limit": 4})
+    return {"data_root": root, "studio_project": root}, {"dataset_id": dataset}, entries, recorder
+
+
+def test_pilot_outcome_prompt_keeps_missed_attempts_unknown(monkeypatch, tmp_path):
     from smart_swarm import studio
     from smart_swarm.episode import atomic
 
-    root = tmp_path / "so101-pilot"
-    root.mkdir()
-    entries = [{"id": "ep_1", "storage": "quarantine", "metadata": {"status": "incomplete"}}]
-    entries.extend({"id": f"ep_{index}", "storage": "episodes", "metadata": {"status": "complete"}}
-                   for index in range(2, 6))
-    monkeypatch.setattr(studio, "native_request", lambda cfg, uri: list(reversed(entries)))
-    monkeypatch.setattr(studio, "prepare", lambda cfg: {"attempt_limit": 4})
-    labels = root / "observed-outcomes.json"
+    config, binding, entries, _ = pilot_outcome_fixture(monkeypatch, tmp_path)
+    labels = tmp_path / "so101-pilot/observed-outcomes.json"
     atomic(labels, {"ep_2": {"outcome": "placement_failed"}})
-    config, binding = {"data_root": tmp_path}, {"dataset_id": "ds_example"}
-    assert studio.pending_outcome(config, binding) == {"episode_id": "ep_3", "attempt": 3}
-    atomic(labels, {name: {"outcome": "unknown"} for name in ("ep_2", "ep_3", "ep_4")})
+    pending = studio.pending_outcome(config, binding)
+    assert pending["attempt"] == 4 and pending["recording"]["episode_id"] == "ep_4"
+    assert pending["recording"]["frames_sha256"] == entries[-1]["metadata"]["frames_sha256"]
+    atomic(labels, {name: {"outcome": "unknown"} for name in ("ep_2", "ep_4")})
     assert studio.pending_outcome(config, binding) is None
+    entries[-1]["storage"] = "quarantine"
+    assert studio.pending_outcome(config, binding) is None
+
+
+def test_pilot_refuses_changed_metadata_and_live_next_attempt(monkeypatch, tmp_path):
+    from smart_swarm import studio
+    from smart_swarm.contract import ProtocolError
+    from smart_swarm.episode import atomic, load
+
+    config, binding, entries, recorder = pilot_outcome_fixture(monkeypatch, tmp_path)
+    recorder.update(active=True, state="ready", dataset_id=binding["dataset_id"], last_episode={"episode_id": "ep_4"})
+    initial = studio.pending_outcome(config, binding)
+    manifest = tmp_path / "data" / binding["dataset_id"] / "episodes/ep_4/episode.json"
+    entries[-1]["metadata"]["operator_labels"] = {"new": True}
+    atomic(manifest, entries[-1]["metadata"])
+    changed = studio.pending_outcome(config, binding)
+    assert initial["recording"]["frames_sha256"] == changed["recording"]["frames_sha256"]
+    with pytest.raises(ValueError, match="changed"):
+        studio.label_attempt(config, binding, initial, "placement_succeeded", assistance="attended_native_motion")
+    recorder.update(state="recording", episode_id="ep_5")
+    with pytest.raises(ProtocolError, match="finish saving"):
+        studio.label_attempt(config, binding, changed, "placement_failed", assistance="unknown")
+    labels = tmp_path / "so101-pilot/observed-outcomes.json"
+    assert not labels.exists()
+    recorder.update(active=False, state="stopped", episode_id="ep_4")
+    result = studio.label_attempt(config, binding, changed, "placement_failed", assistance="unknown")
+    assert result["recording"] == changed["recording"] and load(labels) == {"ep_4": result}
+
+
+def test_native_intake_notices_a_metadata_only_change(monkeypatch, tmp_path):
+    from smart_swarm import operator
+
+    config, binding, entries, _ = pilot_outcome_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(operator, "native_request", lambda *_: entries)
+    original = operator.intake_fingerprint(config, binding)
+    entries[-1]["metadata"]["operator_labels"] = {"present": True}
+    updated = operator.intake_fingerprint(config, binding)
+    receipt = {"fingerprint": original, "state": "checked"}
+    assert operator.intake_is_due(receipt, updated, 1.)
 
 
 def test_complete_native_failures_and_quarantine_never_enter_motor_review():
@@ -176,12 +444,46 @@ def test_complete_native_failures_and_quarantine_never_enter_motor_review():
     incomplete = {**complete, "storage": "quarantine", "metadata": {"status": "incomplete", "reason": "stop"}}
     card = {"attempt_limit": 1, "attempts": [{"source_world_episode_id": "w"}], "scene_group_id": "g"}
     label = {"outcome": "placement_failed"}
-    assert status_for(complete, label, card, 0, {"valid": True})["classification"] == "story_failure"
-    assert status_for(incomplete, None, card, 0, None)["reasons"] == ["stop"]
+    validation = {"source": "hardware", "technical_only": False,
+                  "episodes": [{"episode_id": "native1", "frames": 3, "frames_sha256": "ledger"}]}
+    assert status_for(complete, label, card, 0, validation)["classification"] == "story_failure"
+    interrupted = status_for(incomplete, label, card, 0, None)
+    assert interrupted["reasons"] == ["stop"] and interrupted["outcome"] == "unknown"
+    assert interrupted["observed_outcome_receipt"] == label
     assert status_for(complete, None, card, 1, None)["classification"] == "rejected"
     manifest = {"run_mode": "fixture", "recording_integrity": "complete",
                 "validation_status": "valid", "task_outcome_label": "placement_succeeded"}
     assert classify(manifest, {"valid": True})[0] == "fixture_only"
+
+
+def test_native_success_requires_this_physical_episode_in_the_export():
+    arms = ("leader", "follower")
+    meta = {"status": "complete", "frames": 3, "frames_sha256": "b",
+            "provenance": {"live_calibration": {arm: {"verified_live": True, "snapshot_sha256": arm} for arm in arms}}}
+    complete = {"id": "native2", "storage": "episodes", "metadata": meta}
+    card = {"attempt_limit": 1, "attempts": [{"source_world_episode_id": "w"}], "scene_group_id": "g"}
+    label = {"outcome": "placement_succeeded"}
+    validation = {"source": "hardware", "technical_only": False, "calibration": {"files": {arm: {"sha256": arm} for arm in arms}},
+                  "episodes": [{"episode_id": "native1", "frames": 3, "frames_sha256": "a"}]}
+    stale = status_for(complete, label, card, 0, validation)
+    assert stale["reasons"] == ["native_export_episode_not_verified"]
+    assert stale["outcome"] == "placement_succeeded"
+    snapshot = {"episode_id": "native2", "frames": 3, "frames_sha256": "a", "episode_manifest_sha256": "raw-meta"}
+    validation["episodes"].append(snapshot)
+    assert status_for(complete, label, card, 0, validation)["classification"] == "rejected"
+    snapshot["frames_sha256"] = "b"
+    assert status_for(complete, label, card, 0, validation)["classification"] == "motor_review_excluded"
+    label.update(recording=dict(snapshot), assistance="manual_scene_assistance")
+    assisted = status_for(complete, label, card, 0, validation)
+    assert assisted["classification"] == "motor_review_excluded" and assisted["outcome"] == "placement_succeeded"
+    label["assistance"] = "attended_native_motion"
+    assert status_for(complete, label, card, 0, validation)["classification"] == "eligible_for_motor_review"
+    missing_calibration = status_for(complete, label, card, 0, {**validation, "calibration": {}})
+    assert missing_calibration["reasons"] == ["native_calibration_readbacks_unverified"]
+    technical = {**validation, "source": "synthetic_test", "technical_only": True}
+    assert status_for(complete, label, card, 0, technical)["classification"] == "rejected"
+    snapshot["episode_manifest_sha256"] = "changed-native-meta"
+    assert status_for(complete, label, card, 0, validation)["outcome"] == "unknown"
 
 
 def test_preserved_f6_full_binding_and_truth_perturbation(tmp_path):
@@ -227,12 +529,93 @@ def test_native_intake_waits_for_stop_and_validates_once(monkeypatch, tmp_path):
     assert synced == [binding]
 
 
+def test_native_intake_retries_blocked_generation_with_bounded_delays(monkeypatch, tmp_path):
+    from smart_swarm import operator
+
+    root = tmp_path / "so101-pilot"
+    root.mkdir()
+    config = {"data_root": tmp_path}
+    path = root / "observed-input.json"
+    binding = {"dataset_id": "ds_test"}
+    clock = [100.]
+    transient = {"counts": {"attempts": 1}, "validation_rejection": "Native busy", "validation_retryable": True}
+    recovered = {"counts": {"attempts": 1}, "validation_rejection": None}
+    reports = iter([transient] * 4 + [recovered])
+    monkeypatch.setattr(operator.time, "time", lambda: clock[0])
+    monkeypatch.setattr(operator, "intake_fingerprint", lambda cfg, item: {"recordings": [["native_saved"]]})
+    monkeypatch.setattr(operator, "sync_pilot", lambda cfg, item: next(reports))
+    for due, delay in ((100, 10), (110, 30), (140, 60)):
+        clock[0] = due
+        assert operator.sync_observed_intake(config, binding)["automatic_retry"] == "retry_pending"
+        assert load(path)["next_retry_unix"] == due + delay
+        clock[0] = due + delay - 1
+        assert operator.sync_observed_intake(config, binding) is None
+    clock[0] = 200.
+    assert operator.sync_observed_intake(config, binding)["automatic_retry"] == "retry_exhausted"
+    clock[0] = 1000.
+    assert operator.sync_observed_intake(config, binding) is None
+    assert operator.sync_observed_intake(config, binding, force=True)["automatic_retry"] == "checked"
+    assert len(load(path)["transient_failures"]) == 4
+    assert operator.sync_observed_intake(config, binding) is None
+
+
+def test_native_intake_does_not_retry_invalid_recordings_until_input_changes(monkeypatch, tmp_path):
+    from smart_swarm import operator
+
+    (tmp_path / "so101-pilot").mkdir()
+    config = {"data_root": tmp_path}
+    binding = {"dataset_id": "ds_test"}
+    inputs = ["bad ledger"]
+    outcomes = iter([{"validation_rejection": "Changed frame ledger"}, {"validation_rejection": None}])
+    monkeypatch.setattr(operator, "intake_fingerprint", lambda cfg, item: {"native_manifest": inputs[-1]})
+    monkeypatch.setattr(operator, "sync_pilot", lambda cfg, item: next(outcomes))
+    assert operator.sync_observed_intake(config, binding)["automatic_retry"] == "rejected"
+    assert operator.sync_observed_intake(config, binding) is None
+    inputs.append("new verified recording")
+    assert operator.sync_observed_intake(config, binding)["automatic_retry"] == "checked"
+
+
+def test_native_intake_uses_one_receipt_writer_across_launcher_windows(monkeypatch, tmp_path):
+    from fcntl import LOCK_EX, flock
+
+    from smart_swarm import operator
+    from smart_swarm.contract import ProtocolError
+
+    root = tmp_path / "so101-pilot"
+    root.mkdir()
+    config = {"data_root": tmp_path}
+    binding = {"dataset_id": "ds_test"}
+    monkeypatch.setattr(operator, "intake_fingerprint", lambda cfg, item: {"recordings": [["native_saved"]]})
+    checked = []
+    monkeypatch.setattr(operator, "sync_pilot", lambda cfg, item: checked.append(item) or {})
+    with (root / "intake-receipt.lock").open("a") as owner:
+        flock(owner, LOCK_EX)
+        assert operator.sync_observed_intake(config, binding) is None
+        with pytest.raises(ProtocolError, match="Another Smart Swarm window"):
+            operator.sync_observed_intake(config, binding, force=True)
+    assert checked == []
+    assert operator.sync_observed_intake(config, binding)["automatic_retry"] == "checked"
+    assert checked == [binding]
+
+
 def test_story_preflight_checks_native_rgb_without_general_sensor_dependencies():
     from smart_swarm.fleet_adapter import rgb_readiness
+    from smart_swarm.physical_fleet_timing import CLOCK_KIND
 
-    live = {"running": True, "read_only": True, "robots": {
-        role: {"ages_s": {"rgb": 0.1}, "uncertainty_ms": 24.0} for role in ("tank", "rosmaster")}}
+    live = {"running": True, "read_only": True, "motion_commands_sent": 0, "robots": {
+        role: {"ages_s": {"rgb": 0.1}, "uncertainty_ms": 24.0, "clock_kind": CLOCK_KIND, "boot_id": role,
+               "conversion_errors": {"depth": "optional stream unavailable"}} for role in ("tank", "rosmaster")}}
     assert rgb_readiness(live)["ready"]
+    live["robots"]["tank"]["boot_id"] = ""
+    assert "boot identity" in rgb_readiness(live)["roles"]["tank"]["clock_issue"]
+    assert not rgb_readiness(live)["ready"]
+    live["robots"]["tank"]["boot_id"] = "tank"
+    assert not rgb_readiness({**live, "motion_commands_sent": 1})["ready"]
+    live["robots"]["tank"]["conversion_errors"]["rgb"] = "unusable native format"
+    report = rgb_readiness(live)
+    assert not report["ready"] and not report["roles"]["tank"]["rgb_fresh"]
+    assert report["roles"]["tank"]["rgb_conversion_error"] == "unusable native format"
+    del live["robots"]["tank"]["conversion_errors"]["rgb"]
     live["robots"]["tank"]["ages_s"]["rgb"] = 1.01
     live["robots"]["rosmaster"].update(uncertainty_ms=None, error="Clock samples expired")
     report = rgb_readiness(live)
@@ -266,6 +649,72 @@ def test_studio_reports_current_stop_and_distinguishes_historical_control(monkey
     assert status["teleoperation_phase"] == "following" and status["native_arm_hardware_open"]
 
 
+def attended_studio_snapshots():
+    from copy import deepcopy
+
+    from smart_swarm.attended_so101 import DEVICES, FLAGS
+
+    before = {**dict.fromkeys(FLAGS, False), "inventory_present": dict.fromkeys(DEVICES, True),
+              "native_device_identities": {key: f"/dev/{key}" for key in DEVICES},
+              "native_camera_preview": {key: {"fresh": True} for key in ("wrist", "top")},
+              "native_stop_generation": 1, "native_stop_state": {"teleoperation": "devices_closed"},
+              "native_calibration_readback": {"leader": True, "follower": True},
+              "native_calibration_readback_monotonic_ns": {"leader": 50, "follower": 51},
+              "native_following_readback": {"state": "stopped", "phase": "following", "source": "hardware",
+                  "last_sample_ns": 70, "samples": 20, "error": None, "stop_errors": [],
+                  "calibration_sha256": {"leader": "a" * 64, "follower": "b" * 64}}}
+    after = deepcopy(before)
+    after.update(native_stop_generation=2, native_calibration_readback_monotonic_ns={"leader": 120, "follower": 130})
+    after["native_following_readback"]["last_sample_ns"] = 180
+    return before, after
+
+
+def test_attended_check_keeps_operator_and_native_stop_evidence(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from smart_swarm import attended_so101, physical_story_source
+
+    before, after = attended_studio_snapshots()
+    snapshots = iter((before, after))
+    instants = iter((100, 200))
+    monkeypatch.setattr(attended_so101, "native_status", lambda _: next(snapshots))
+    monkeypatch.setattr(attended_so101, "time", SimpleNamespace(monotonic_ns=lambda: next(instants), time=lambda: 10.))
+    monkeypatch.setattr(physical_story_source, "homebrain_boot", lambda: "boot-a")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    config = {"data_root": tmp_path}
+    result = attended_so101.record_attended(config)
+    assert result["recorded"] and result["native_stop_generation"] == 2
+    receipt = load(Path(result["receipt"]))
+    assert receipt["operator_confirmed_framing_tracking_and_stop"] and not receipt["motion_requested_by_smart_swarm"]
+    current = attended_so101.attended_status(config, {**after, "native_stop_generation": 3})
+    assert current["current"] and current["verified_stop_generation"] == 2
+    team = {"so101_studio": {**after, "learning_job_active": False}, "active_native_capture": None,
+            "story_observation_readiness": {"issues": ["No mobile clock evidence"]}}
+    monkeypatch.setattr(physical_story_source, "native_team_status", lambda *_args, **_kwargs: team)
+    monkeypatch.setattr(physical_story_source, "fleet_capacity", lambda _: {"free_bytes": 2 << 30,
+                        "native_minimum_free_bytes": 1 << 30})
+    readiness = physical_story_source.story_readiness(config)
+    assert readiness["so101_studio"]["physical_preflight_verified"] and not readiness["ready_for_native_lease_check"]
+    assert readiness["pending_attended_checks"] == ["Distributed scene and witness framing"]
+    changed = {**after, "native_device_identities": {**after["native_device_identities"], "wrist": "/dev/interchanged"}}
+    assert not attended_so101.attended_status(config, changed)["current"]
+    monkeypatch.setattr(physical_story_source, "homebrain_boot", lambda: "boot-b")
+    assert not attended_so101.attended_status(config, after)["current"]
+
+
+def test_attended_check_refuses_an_old_follow_or_unacknowledged_stop():
+    from smart_swarm.attended_so101 import verify_window
+
+    before, after = attended_studio_snapshots()
+    with pytest.raises(ValueError, match="new native STOP"):
+        verify_window(before, before, 100, 200)
+    with pytest.raises(ValueError, match="new successful native following"):
+        verify_window(before, {**before, "native_stop_generation": 2}, 100, 200)
+    after["native_calibration_readback"]["follower"] = False
+    with pytest.raises(ValueError, match="both saved calibrations"):
+        verify_window(before, after, 100, 200)
+
+
 def test_distributed_start_refuses_unconfirmed_native_stop_before_recorder_check(monkeypatch):
     from smart_swarm import physical_story_source as story
     from smart_swarm.contract import ProtocolError
@@ -276,6 +725,7 @@ def test_distributed_start_refuses_unconfirmed_native_stop_before_recorder_check
     team = {"so101_studio": state, "story_observation_readiness": {"ready": True, "issues": []},
             "active_native_capture": "existing"}
     monkeypatch.setattr(story, "native_team_status", lambda _, **kw: team)
+    monkeypatch.setattr(story, "fleet_capacity", lambda _: {"free_bytes": 2 << 30, "native_minimum_free_bytes": 1 << 30})
     monkeypatch.setattr(story.subprocess, "run", lambda *_, **kw: pytest.fail("Native lease should stay untouched"))
     report = story.story_readiness({})
     assert not report["ready_for_native_lease_check"]
@@ -287,11 +737,11 @@ def test_distributed_start_refuses_unconfirmed_native_stop_before_recorder_check
 def test_story_preflight_separates_busy_native_reservation_from_helper_failure(monkeypatch):
     from subprocess import CompletedProcess, TimeoutExpired
 
-    from smart_swarm import physical_story_source as story
+    from smart_swarm import physical_story_source as story, studio
     from smart_swarm.contract import ProtocolError
 
     monkeypatch.setattr(story, "story_readiness", lambda _: {"blocking_issues": []})
-    monkeypatch.setattr(story, "studio_env", lambda _: {})
+    monkeypatch.setattr(studio, "studio_env", lambda _: {})
     config = {"studio_python": "native-python"}
     for result, code in ((75, "RESOURCE_BUSY"), (1, "OFFLINE")):
         monkeypatch.setattr(story.subprocess, "run", lambda *_, **kw: CompletedProcess([], result, stderr="helper error"))
@@ -305,6 +755,141 @@ def test_story_preflight_separates_busy_native_reservation_from_helper_failure(m
     monkeypatch.setattr(story.subprocess, "run", timeout)
     with pytest.raises(ProtocolError, match="reservation did not answer"):
         story.story_preflight(config)
+
+
+def test_story_readiness_applies_the_existing_native_storage_floor(monkeypatch, tmp_path):
+    from smart_swarm import physical_story_source as story
+
+    native = {"inventory_present": {key: True for key in ("wrist", "top", "leader", "follower")},
+              "native_stop_check_required": False, "native_arm_hardware_open": False,
+              "recording_active": False, "teleoperation_active": False, "policy_active": False, "learning_job_active": True}
+    team = {"so101_studio": native, "story_observation_readiness": {"issues": []}, "active_native_capture": None}
+    monkeypatch.setattr(story, "native_team_status", lambda *_args, **_kwargs: team)
+    space = {"free_bytes": 1024**3 - 1, "native_minimum_free_bytes": 1024**3}
+    monkeypatch.setattr(story, "fleet_capacity", lambda _: dict(space))
+    config = {"data_root": tmp_path}
+    blocked = story.story_readiness(config)
+    assert [row["code"] for row in blocked["blocking_issues"]] == ["STORAGE_LIMIT"]
+    assert not blocked["motion_requested"] and not blocked["recording_started"]
+    space["free_bytes"] += 1
+    assert story.story_readiness(config)["ready_for_native_lease_check"]
+
+
+def test_story_capture_budget_follows_remaining_native_archives(tmp_path):
+    from smart_swarm.episode import atomic
+    from smart_swarm.physical_story_plan import prepare
+    from smart_swarm.physical_story_source import capture_budget
+
+    config = {"data_root": tmp_path}
+    space = {"free_bytes": 5 << 30, "native_minimum_free_bytes": 1 << 30}
+    estimates = [300 << 20, 320 << 20]
+    reference = {"estimated_60s_payload_bytes": estimates}
+    assert capture_budget(config, space, reference) is None
+    assert not list(tmp_path.iterdir())
+    plan = prepare(config)
+    archived = [{"status": "complete", "fleet_capture_id": "saved"}, {"status": "incomplete"},
+                {"status": "recording", "fleet_capture_id": "acknowledged"}, {"status": "placement_recording"}]
+    for card, state in zip(plan["cards"], archived):
+        journal = tmp_path / "physical-stories" / card["story_id"] / "trial.json"
+        journal.parent.mkdir(parents=True)
+        atomic(journal, state)
+    result = capture_budget(config, space, reference)
+    assert result["next_block"]["block"] == 1 and result["next_block"]["archives_remaining"] == 3
+    deck = result["remaining_deck"]
+    assert deck["archives_remaining"] == 21
+    expected = [space["native_minimum_free_bytes"] + 21 * size for size in estimates]
+    assert deck["estimated_bytes_with_native_reserve"] == expected
+    assert deck["free_bytes_beyond_upper_estimate"] == space["free_bytes"] - expected[-1] < 0
+
+
+def test_native_mobile_probe_preserves_wrapped_socket_error_codes(monkeypatch):
+    import errno
+    import socket
+
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    from native_fleet_story_capture import transport_failure
+
+    for code, expected in ((socket.EAI_NONAME, "name_resolution_failed"),
+                           (errno.EHOSTUNREACH, "host_unreachable"), (errno.ECONNREFUSED, "connection_refused")):
+        error = ConnectionError(f"[Errno {code}] Native connection failed")
+        result = transport_failure(error)
+        assert result["errno"] == code and result["status"] == expected
+
+
+def test_framing_never_reads_images_during_active_native_recording(monkeypatch, tmp_path):
+    from smart_swarm import physical_framing as framing
+    from smart_swarm.contract import ProtocolError
+
+    state = {"recording": {"active": True}, "teleoperation": {}, "preview": {}, "jobs": []}
+    monkeypatch.setattr(framing, "native_request", lambda *_: state)
+    monkeypatch.setattr(framing, "read_preview_jpeg", lambda *_: pytest.fail("Preview read during active recording"))
+    with pytest.raises(ProtocolError, match="Studio control and recording are idle"):
+        framing.capture_framing({"data_root": tmp_path})
+    assert not list(tmp_path.iterdir())
+
+
+def test_framing_discards_images_when_stop_changes(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from smart_swarm import physical_framing as framing
+    from smart_swarm.contract import ProtocolError
+
+    stream = {"width": 8, "height": 6}
+    cameras = {role: {"stream": stream, "frames_received": 10 + index} for index, role in enumerate(framing.ROLES)}
+    reads = iter({"stop_generation": generation, "cameras": cameras} for generation in (1, 2))
+    output = BytesIO()
+    Image.new("RGB", (8, 6), "white").save(output, format="JPEG")
+    monkeypatch.setattr(framing, "snapshot", lambda _: next(reads))
+    monkeypatch.setattr(framing, "read_preview_jpeg", lambda *_: output.getvalue())
+    with pytest.raises(ProtocolError, match="STOP changed"):
+        framing.capture_framing({"data_root": tmp_path})
+    assert not list(tmp_path.iterdir())
+
+
+def test_mobile_transport_probe_keeps_stale_hub_blocked(monkeypatch):
+    import json
+    from subprocess import CompletedProcess
+
+    from smart_swarm import physical_story_source as story
+
+    native = {"rgb_fresh": False, "clock_within_limit": False}
+    routes = [{"role": role, "isolated": isolated, "port": port + int(isolated), "status": result}
+              for role, result, port in (("tank", "clock_sample", 8043), ("rosmaster", "host_unreachable", 8053))
+              for isolated in (False, True)]
+    report = {"ready_for_native_lease_check": False, "blocking_issues": [{"code": "OFFLINE"}],
+              "mobile_rgb_and_clocks": {"roles": {"tank": native, "rosmaster": native}}}
+    monkeypatch.setattr(story, "story_readiness", lambda _: dict(report))
+    monkeypatch.setattr(story, "fleet_invocation", lambda _, *options: (list(options), {}))
+
+    def run(args, **_):
+        assert args == ["--probe-mobile"]
+        value = {"routes": routes, "motion_requested": False, "recording_started": False}
+        return CompletedProcess(args, 0, stdout=json.dumps(value))
+
+    monkeypatch.setattr(story.subprocess, "run", run)
+    checked = story.story_readiness_with_transport({"explorer_python": "python", "explorer_project": "explorer"})
+    assert checked["ready_for_native_lease_check"] is False and checked["blocking_issues"] == report["blocking_issues"]
+    assert checked["mobile_native_transport"]["next_check_by_role"]["tank"].startswith("Check this role's RGB")
+    assert checked["mobile_native_transport"]["next_check_by_role"]["rosmaster"].startswith("On rosmaster's console")
+
+
+def test_story_preflight_refuses_unavailable_explorer_helper_before_reserving_studio(monkeypatch):
+    from smart_swarm import physical_story_source as story
+    from smart_swarm.contract import ProtocolError
+
+    native = {"inventory_present": {"wrist": True, "top": True, "leader": True, "follower": True},
+              "native_stop_check_required": False, "native_arm_hardware_open": False,
+              "recording_active": False, "teleoperation_active": False, "policy_active": False,
+              "learning_job_active": False}
+    team = {"so101_studio": native, "story_observation_readiness": {"issues": []}, "active_native_capture": None}
+    monkeypatch.setattr(story, "native_team_status", lambda *_args, **_kwargs: team)
+    monkeypatch.setattr(story, "fleet_capacity", lambda _: {"readback_error": "recorder unavailable"})
+    monkeypatch.setattr(story.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("Studio lease should stay untouched"))
+    with pytest.raises(ProtocolError, match="native Explorer recorder helper") as error:
+        story.story_preflight({})
+    assert error.value.code == "OFFLINE"
 
 
 def test_native_clock_replay_keeps_evaluator_frame_outside_policy_scope(tmp_path):
@@ -372,14 +957,16 @@ def test_smolvla_schedule_uses_real_slots_inside_the_training_allowance():
         smolvla_schedule(probe, 1_500, 2_000_000_000)
 
 
-def test_compact_comparison_import_allows_egl_configuration_before_mujoco():
+@pytest.mark.parametrize("module", ("run_compact_motor_comparison", "probe_precontact_act", "audit_act_static_raster"))
+def test_motor_probe_import_allows_egl_configuration_before_mujoco(module):
     import os
     import subprocess
     import sys
 
     code = '''
+import importlib
 import sys
-import run_compact_motor_comparison as runner
+runner = importlib.import_module(sys.argv[1])
 
 assert "mujoco" not in sys.modules
 runner.configure_renderer(runner.settings())
@@ -389,7 +976,7 @@ from mujoco.rendering.classic.gl_context import GLContext
 assert GLContext.__module__ == "mujoco.egl"
 '''
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src") + os.pathsep + str(ROOT / "scripts")}
-    subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT, env=env, check=True, timeout=20)
+    subprocess.run([sys.executable, "-B", "-c", code, module], cwd=ROOT, env=env, check=True, timeout=20)
 
 
 def test_motor_evaluation_requires_matching_conditioned_profile_and_camera_roles(tmp_path):
@@ -473,6 +1060,26 @@ def test_motor_evaluation_only_selects_gpu_rendering_inside_native_admission(tmp
     args = cli.parser().parse_args(["evaluate", "--protocol", "motor-pilot", "--checkpoint", "path", "--gpu-render"])
     assert cli.motor_command({"asset_root": tmp_path, "data_root": tmp_path}, args) == "result"
     assert events == ["admitted", "configured", "evaluated", "released"]
+
+
+def test_cuda_policy_requires_the_native_compute_grant(monkeypatch):
+    from smart_swarm.research_jobs import admitted, studio_lease_mode, verify_compute_scope
+    from smart_swarm.training import offline
+
+    grant = {"reserved": True, "backend": "so101_lab.resources.ResourceLease", "device": "cuda",
+             "gpu_render": False, "locks": ["cpu_compute", "recording", "gpu_compute"]}
+    verify_compute_scope("cuda", grant)
+    with pytest.raises(ValueError, match="native Studio compute grant"):
+        verify_compute_scope("cuda", {**grant, "gpu_render": True})
+    with pytest.raises(ValueError, match="native Studio compute grant"):
+        verify_compute_scope("cuda", {**grant, "locks": ["cpu_compute"]})
+    with pytest.raises(ValueError, match="Studio reservation"):
+        with admitted({}, "test-cuda", device="cuda"):
+            pytest.fail("A platform without native Studio admission must deny CUDA")
+    assert studio_lease_mode(False, False, "cuda")[0] == ["--gpu-compute"]
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    assert offline()["CUDA_VISIBLE_DEVICES"] == ""
+    assert offline(device="cuda")["CUDA_VISIBLE_DEVICES"] == "0"
 
 
 def test_motor_visual_mesh_merges_duplicate_faces_and_preserves_surviving_winding():
@@ -560,28 +1167,30 @@ def test_story_interrupt_preserves_index_and_charges_the_attempt(monkeypatch, tm
 
 def test_physical_motor_corpus_publishes_only_stable_reviewed_sources(monkeypatch, tmp_path):
     from smart_swarm import physical_motor_dataset as corpus
-    from smart_swarm.episode import atomic, sha
     from smart_swarm.physical_story_plan import prepare
 
-    studio = tmp_path / "studio"
-    config = {"data_root": tmp_path, "studio_project": studio}
+    config = {"data_root": tmp_path, "studio_project": tmp_path / "studio"}
     first, failure = prepare(config)["cards"][:2]
     root = tmp_path / "physical-stories"
-    export = studio / "runtime/smart-swarm-pilot-exports/fixture"
+    export = config["studio_project"] / "runtime/smart-swarm-pilot-exports/fixture"
     meta = export / "provenance/export.json"
     meta.parent.mkdir(parents=True)
     atomic(meta, {"status": "complete", "dataset_sha256": "export", "repo_id": "native/export",
                   "source": "hardware", "test_only": False})
+    parquet = export / "data/rows.parquet"
+    parquet.parent.mkdir()
+    parquet.write_bytes(b"original numeric fixture")
     for card in (first, failure):
         trial = root / card["story_id"]
         trial.mkdir(parents=True)
-        atomic(trial / "trial.json", {"card": card})
+        atomic(trial / "trial.json", {"card": card, "studio_dataset_id": "ds_1234567890123456"})
     selected = {"scene_group_id": first["source_group_id"], "split": first["split"], "sample_count": 40,
                 "outcome": "placement_succeeded", "native_frame_manifest_sha256": "original"}
     binding = {"path": str(export), "export_metadata_sha256": sha(meta), "dataset_sha256": "export",
                "repo_id": "native/export", "source_frame_manifest_sha256": "original", "source": "hardware",
                "technical_only": False, "camera_keys": list(corpus.CAMERA_KEYS),
-               "live_calibration_snapshot_hashes": {"leader": "a", "follower": "b"}}
+               "live_calibration_snapshot_hashes": {"leader": "a", "follower": "b"},
+               "export_storage_sha256": corpus.export_storage_digest(export)}
     good = root / first["story_id"]
     atomic(good / "motor-intake.json", {"status": "reviewable_prefix", "segment": "motor-segment.json"})
     atomic(good / "motor-segment.json", {**selected, "native_export": binding})
@@ -593,7 +1202,7 @@ def test_physical_motor_corpus_publishes_only_stable_reviewed_sources(monkeypatc
     assert result["corpus_rejections"][0]["reason"] == "observed failure"
     manifest = Path(result["manifest"])
     assert sha(manifest) == manifest.stem
-    atomic(meta, {"source": "synthetic_test"})
+    parquet.write_bytes(b"changed numeric fixture")
     assert corpus.publish(config)["prefix_count"] == 0
     assert sha(manifest) == manifest.stem
 
@@ -665,8 +1274,8 @@ def test_failed_fleet_capture_retains_admitted_native_arm_prefix(monkeypatch, tm
 
     config = {"data_root": tmp_path}
     monkeypatch.setattr(story, "card_for", lambda cfg, card: None)
-    monkeypatch.setattr(story, "native_status", lambda cfg: {})
-    monkeypatch.setattr(story, "native_idle", lambda status: None)
+    idle_status = dict(recording_active=False, teleoperation_active=False, policy_active=False, learning_job_active=False)
+    monkeypatch.setattr(story, "native_status", lambda cfg: idle_status)
     monkeypatch.setattr(story, "fleet_manifest", lambda cfg, capture: {"phase": "failed", "error": "Native camera timed out"})
     trial = story.story_workspace(config) / "lost-witness"
     trial.mkdir()
@@ -674,7 +1283,8 @@ def test_failed_fleet_capture_retains_admitted_native_arm_prefix(monkeypatch, tm
              "markers": {"placement_closed": {}, "relocation_closed": {}}}
     atomic(trial / "trial.json", state)
 
-    def prepare(cfg, path, journal):
+    def prepare(cfg, path, journal, *, motor_only):
+        assert motor_only
         journal.update(motor_segment_admitted=True, native_episode_id="accepted-arm-episode")
         return path, {}
 

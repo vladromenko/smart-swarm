@@ -9,8 +9,7 @@ import numpy as np
 from PIL import Image
 
 from compare_primary_supervision import score_paths
-from rehearse_native_event_annotations import ARCHIVE, PILOT, project
-from rehearse_physical_story_recovery import native_fixture
+from rehearse_native_event_annotations import ARCHIVE, NATIVE_FIXTURE, PILOT, project
 from smart_swarm.cli import settings
 from smart_swarm.contract import json_bytes, time_at
 from smart_swarm.episode import POLICY, TRUTH, Recorder, Replay, atomic, load, rows, sha
@@ -22,7 +21,7 @@ from smart_swarm.studio import validate_story_episode
 
 
 def native_case(config, root):
-    source = native_fixture(config)
+    source = config["studio_project"] / NATIVE_FIXTURE
     proof = validate_story_episode(config, source, technical=True)
     recorder, state, arm, tank, query = project(config, root, source, proof, "F6")
     recorder.meta[SCOPE_FLAG] = True
@@ -76,7 +75,7 @@ def counterfactual(source, mapping):
             add_landmarks(scoped, AGENTS[2], True)
         manifest = load(scoped / "manifest.json")
         packets = {agent: rows(scoped / POLICY / f"{agent}.jsonl") for agent in AGENTS}
-        digest = window_digest(manifest, packets)
+        digest = window_digest(manifest, packets, projected=True)
         result = run_worker(scoped, digest)
     if result["slot_mapping"] != mapping:
         raise ValueError("The worker did not recover the configured fixture side relationship")

@@ -47,7 +47,11 @@ def bound_visual_profile(checkpoint, validation):
 
 
 class Worker:
-    def __init__(self, checkpoint, validation, logfile, *, deadline=None, full_validation=False, smolvla_chunks=False):
+    def __init__(self, checkpoint, validation, logfile, *, deadline=None, full_validation=False, smolvla_chunks=False,
+                 device="cpu", reservation=None, timing_startup=False):
+        from .research_jobs import verify_compute_scope
+
+        verify_compute_scope(device, reservation)
         self.deadline = deadline
         self.pending_actions = deque()
         self.smolvla_chunks = smolvla_chunks
@@ -60,8 +64,12 @@ class Worker:
                     "--checkpoint", str(checkpoint), "--validation", str(validation)]
             if full_validation:
                 argv.append("--all-validation-sources")
+            if device != "cpu":
+                argv.extend(("--device", device))
+            if timing_startup:
+                argv.append("--timing-startup")
             try:
-                self.process = subprocess.Popen(argv, env=offline(), stdin=subprocess.PIPE, text=True,
+                self.process = subprocess.Popen(argv, env=offline(device=device), stdin=subprocess.PIPE, text=True,
                                                 stdout=stream, stderr=subprocess.STDOUT, pass_fds=(send,))
             except Exception:
                 os.close(receive)
@@ -74,7 +82,7 @@ class Worker:
         if self.deadline is not None:
             timeout = min(timeout, max(0., self.deadline - time.monotonic()))
         if not select.select([self.replies], [], [], timeout)[0]:
-            raise TimeoutError("Local CPU policy worker did not answer before its deadline")
+            raise TimeoutError("Local policy worker did not answer before its deadline")
         line = self.replies.readline()
         if not line:
             raise RuntimeError("Checkpoint worker exited; inspect policy-worker.log")
@@ -178,20 +186,22 @@ def evaluation_record(checkpoint, dataset, profile, seed_start, role, count, res
 
 
 def evaluate(assets, checkpoint, dataset, base, count, steps, wall_seconds, profile="aligned-sample-v2", seed_start=31_000,
-             *, role="development", heartbeat=None, reservation=None, smolvla_chunks=False):
+             *, role="development", heartbeat=None, reservation=None, smolvla_chunks=False, device="cpu"):
     if not 1 <= count <= 20 or not 30 <= steps <= 600 or not 30 <= wall_seconds <= 7200:
         raise ValueError("Invalid bounded evaluation profile")
     root = base / f"motor-pilot-{uuid.uuid4().hex[:12]}"
     root.mkdir(exist_ok=False, parents=True)
     started = time.monotonic()
     record = evaluation_record(checkpoint, dataset, profile, seed_start, role, count, reservation)
+    record["policy_device"] = device
     if smolvla_chunks:
         record["action_transport"] = "verified-smolvla-chunk"
     atomic(root / "evaluation.json", record)
     worker = None
     try:
         worker = Worker(checkpoint, dataset / "validation", root / "policy-worker.log", deadline=started + wall_seconds,
-                        full_validation=role == "fresh-test", smolvla_chunks=smolvla_chunks)
+                        full_validation=role == "fresh-test", smolvla_chunks=smolvla_chunks, device=device,
+                        reservation=reservation)
         record["input_profile"] = worker.input_profile
         record.update(worker.recv(timeout=min(480, wall_seconds)))
         for idx in range(count):

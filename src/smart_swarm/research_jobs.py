@@ -11,9 +11,16 @@ from .platform_client import production_client, reservation
 
 
 @contextmanager
-def admitted(config, job_id, *, gpu_render=False):
-    if config.get("native_cpu_admission"):
-        with native_cpu(config, job_id, gpu_render=gpu_render) as grant:
+def admitted(config, job_id, *, gpu_render=False, archive_only=False, device="cpu"):
+    native = config.get("native_cpu_admission")
+    if device not in ("cpu", "cuda"):
+        raise ValueError(f"Unknown research device {device}")
+    if device == "cuda" and (gpu_render or archive_only or not native):
+        raise ValueError("CUDA policy compute requires its own verified Studio reservation mode")
+    if archive_only and (gpu_render or not native):
+        raise ValueError("Archive-only work requires the verified native Studio CPU reservation")
+    if native:
+        with native_cpu(config, job_id, gpu_render=gpu_render, archive_only=archive_only, device=device) as grant:
             yield grant
         return
     if gpu_render:
@@ -24,33 +31,60 @@ def admitted(config, job_id, *, gpu_render=False):
         yield grant, heartbeat
 
 
+def studio_lease_mode(gpu_render, archive_only, device):
+    if device == "cuda":
+        return ["--gpu-compute"], "Studio CUDA policy compute"
+    if gpu_render:
+        return ["--gpu-render"], "Studio CPU/recorder and GPU for MuJoCo rendering"
+    if archive_only:
+        return ["--archive-only"], "Studio CPU only"
+    return [], "Studio CPU/recorder"
+
+
+def verify_compute_scope(device, grant):
+    if device not in ("cpu", "cuda"):
+        raise ValueError(f"Unknown policy device {device}")
+    if device == "cuda" and (not grant or not grant.get("reserved") or grant.get("device") != "cuda"
+            or grant.get("gpu_render") is not False or grant.get("backend") != "so101_lab.resources.ResourceLease"
+            or set(grant.get("locks", ())) != {"cpu_compute", "recording", "gpu_compute"}):
+        raise ValueError("CUDA policy compute requires the live native Studio compute grant")
+
+
+def read_native_grant(holder):
+    if not select.select([holder.stdout], [], [], 10)[0]:
+        raise TimeoutError("Native Studio reservation was not acknowledged")
+    line = holder.stdout.readline()
+    if not line:
+        raise RuntimeError(f"Native Studio reservation rejected: {holder.stderr.read().strip()}")
+    return json.loads(line)
+
+
 @contextmanager
-def native_cpu(config, job_id, *, gpu_render=False):
+def native_cpu(config, job_id, *, gpu_render=False, archive_only=False, device="cpu"):
     from .studio import native_status, studio_env
 
-    native_idle(native_status(config))
+    if not archive_only:
+        native_idle(native_status(config))
     script = Path(__file__).resolve().parents[2] / "scripts/studio_cpu_lease.py"
-    args = [config["studio_python"], str(script)]
-    if gpu_render:
-        args.append("--gpu-render")
+    flags, scope = studio_lease_mode(gpu_render, archive_only, device)
+    args = [config["studio_python"], str(script), *flags]
     with subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, env=studio_env(config)) as holder:
         try:
-            if not select.select([holder.stdout], [], [], 10)[0]:
-                raise TimeoutError("Native Studio reservation was not acknowledged")
-            line = holder.stdout.readline()
-            if not line:
-                raise RuntimeError(f"Native Studio reservation rejected: {holder.stderr.read().strip()}")
-            grant = json.loads(line)
+            grant = {**read_native_grant(holder), "job_id": job_id, "device": device,
+                     "scope": scope, "gpu_render": gpu_render}
+            if archive_only and grant.get("locks") != ["cpu_compute"]:
+                raise RuntimeError("Archive-only work was not granted the native CPU-only reservation")
+            verify_compute_scope(device, grant)
 
             def heartbeat():
                 if holder.poll() is not None:
                     raise RuntimeError("The native Studio admission process exited")
-                native_idle(native_status(config))
+                if not archive_only:
+                    native_idle(native_status(config))
 
             heartbeat()
-            scope = "Studio CPU/recorder and GPU for MuJoCo rendering" if gpu_render else "Studio CPU/recorder"
-            yield {**grant, "job_id": job_id, "device": "cpu", "scope": scope, "gpu_render": gpu_render}, heartbeat
+            yield grant, heartbeat
         finally:
             holder.stdin.close()
             try:

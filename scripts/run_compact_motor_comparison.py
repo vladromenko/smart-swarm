@@ -328,7 +328,8 @@ def execute_model(model, release):
     config = settings()
     configure_renderer(config)
     destination = EVIDENCE / f"{model}-full.json"
-    with admitted(config, f"smart-swarm-compact-{model}-comparison") as (grant, heartbeat):
+    archive_only = bool(config.get("native_cpu_admission"))
+    with admitted(config, f"smart-swarm-compact-{model}-comparison", archive_only=archive_only) as (grant, heartbeat):
         if prepare(model) != release:
             raise ValueError("The approved motor dataset changed before native admission")
         claim_release(release)
