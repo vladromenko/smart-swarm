@@ -61,14 +61,15 @@ def test_operator_resumes_acknowledged_open_card_before_new_card(monkeypatch, tm
     assert operator.physical_steps(config, trial.name, state) == state
 
 
-def test_studio_phase_finishes_before_the_staged_native_capture(monkeypatch, tmp_path):
-    config = {"data_root": tmp_path}
-    card = source.prepare(config)["cards"][0]
-    identifier = card["story_id"]
+def staged_native_fixture(monkeypatch, tmp_path):
+    config = {"data_root": tmp_path, "studio_project": tmp_path / "studio"}
     now = {"monotonic_ns": 1_000_000_000, "unix_ns": 1_000_000_000}
     episodes = {}
+    studio = dict.fromkeys(("recording_active", "teleoperation_active", "policy_active",
+                            "native_arm_hardware_open", "native_stop_check_required"), False)
     monkeypatch.setattr(source, "anchor", lambda: now.copy())
-    monkeypatch.setattr(source, "story_preflight", lambda *_: None)
+    monkeypatch.setattr(source, "story_preflight", lambda *_, **_options: None)
+    monkeypatch.setattr(source, "native_status", lambda *_: studio)
     monkeypatch.setattr(source, "dataset", lambda *_: "studio-dataset")
     monkeypatch.setattr(source, "episode_ids", lambda *_: episodes)
 
@@ -79,22 +80,59 @@ def test_studio_phase_finishes_before_the_staged_native_capture(monkeypatch, tmp
         return receipt["id"]
 
     monkeypatch.setattr(source, "launch_fleet", acknowledge)
+    return config, now, episodes
+
+
+def write_staged_native_episode(config, name):
+    directory = config["studio_project"] / "data/studio-dataset/episodes" / name
+    directory.mkdir(parents=True)
+    ledger = directory / "frames.jsonl"
+    ledger.write_text("{}\n")
+    meta = {"status": "complete", "first_timestamp_ns": 2_000_000_000, "last_timestamp_ns": 31_000_000_000,
+            "frames_sha256": sha(ledger), "frames": 1}
+    atomic(directory / "episode.json", meta)
+    return {"id": name, "storage": "episodes", "metadata": meta}, directory / "episode.json"
+
+
+def test_studio_phase_finishes_before_the_staged_native_capture(monkeypatch, tmp_path):
+    config, now, episodes = staged_native_fixture(monkeypatch, tmp_path)
+    card = source.prepare(config)["cards"][0]
+    identifier = card["story_id"]
     state = source.begin(config, identifier, staged=True)
     assert state["status"] == "placement_recording" and "fleet_capture_id" not in state
     now.update(monotonic_ns=30_000_000_000, unix_ns=30_000_000_000)
     source.mark(config, identifier, "placement_closed", placement_outcome="placement_succeeded")
     with pytest.raises(source.StudioEpisodeUnlinked):
         source.start_relocation(config, identifier)
-    source_row = {"id": "matching-studio", "storage": "episodes", "metadata": {
-        "status": "complete", "first_timestamp_ns": 2_000_000_000, "last_timestamp_ns": 31_000_000_000}}
+    source_row, episode_path = write_staged_native_episode(config, "matching-studio")
     episodes[source_row["id"]] = source_row
     now.update(monotonic_ns=100_000_000_000, unix_ns=100_000_000_000)
+    with monkeypatch.context() as offline:
+        def disconnected(_, *, require_attended=True):
+            assert not require_attended
+            raise ProtocolError("OFFLINE", "Tank RGB expired")
+
+        offline.setattr(source, "story_preflight", disconnected)
+        with pytest.raises(ProtocolError, match="Tank RGB expired"):
+            source.start_relocation(config, identifier)
     selected, staged = operator.next_story(config)
     assert selected == card and staged["status"] == "placement_recording"
+    assert staged["staged_studio_episode_id"] == source_row["id"] and staged["reason"] == "Tank RGB expired"
+    sealed = staged["staged_studio_recording"]
+    original = load(episode_path)
+    source_row["metadata"] = {**original, "note": "different native metadata"}
+    atomic(episode_path, source_row["metadata"])
+    with pytest.raises(ValueError, match="exact Studio recording changed"):
+        source.start_relocation(config, identifier)
+    source_row["metadata"] = original
+    atomic(episode_path, original)
+    episodes["later"] = write_staged_native_episode(config, "later")[0]
     state = source.start_relocation(config, identifier)
     assert state["staged_studio_episode_id"] == source_row["id"]
+    assert state["staged_studio_recording"] == sealed and "reason" not in state
     assert state["fleet_acknowledgement"]["monotonic_ns"] == 101_000_000_000
     assert state["fleet_window_s"] == 60 and state["status"] == "recording"
+    assert state["fleet_settled_window_s"] == 4
 
 
 def test_mobile_acknowledgement_failure_preserves_the_saved_placement(monkeypatch, tmp_path):
@@ -193,9 +231,10 @@ def test_relocation_waits_for_recorded_rgb_and_preserves_a_late_start(monkeypatc
     from smart_swarm.native_fleet_start import START_GATE
 
     config = {"data_root": tmp_path}
-    identifier = "recording-test"
+    identifier = source.prepare(config)["cards"][0]["story_id"]
     state = {"fleet_acknowledgement": {"monotonic_ns": 100_000_000_000}, "fleet_window_s": 60,
-             "fleet_rgb_start_gate": START_GATE}
+             "fleet_rgb_start_gate": START_GATE, "status": "recording", "fleet_capture_id": "a" * 32,
+             "markers": {"placement_closed": {}}}
     ticks = [107_000_000_000]
     monkeypatch.setattr(operator, "is_capturing", lambda *_: True)
     monkeypatch.setattr(operator.time, "monotonic_ns", lambda: ticks[0])
@@ -208,11 +247,74 @@ def test_relocation_waits_for_recorded_rgb_and_preserves_a_late_start(monkeypatc
     monkeypatch.setattr(operator, "observe_motion", lambda *_args, **_kwargs: pytest.fail("No relocation prompt"))
     journal = source.story_workspace(config) / identifier / "trial.json"
     journal.parent.mkdir()
-    assert operator.record_relocation(config, identifier, state) == state
+    atomic(journal, state)
+    persisted = operator.record_relocation(config, identifier, state)
+    assert persisted == load(journal)
     assert ticks[0] == 145_000_000_000
     withheld = load(journal)["relocation_prompt_withheld"]
     reason = replay.capture_failure({"phase": "complete", "readback": {"passed": True}}, ["relocation_closed"], withheld=withheld)
     assert "usable RGB start" in reason
+
+
+def test_reopening_after_relocation_prompt_keeps_native_recording_and_boundary(monkeypatch, tmp_path, capsys):
+    config = {"data_root": tmp_path}
+    card = source.prepare(config)["cards"][0]
+    trial = source.story_workspace(config) / card["story_id"]
+    trial.mkdir()
+    capture = "1" * 32
+    placement = {"observed_placement_outcome": "placement_succeeded"}
+    state = {"status": "recording", "card": card, "fleet_capture_id": capture, "fleet_launch_requested": {},
+             "markers": {"placement_closed": placement}}
+    journal = trial / "trial.json"
+    atomic(journal, state)
+    fleet = {"phase": "recording", "readback": {"passed": True}}
+    monkeypatch.setattr(source, "fleet_manifest", lambda *_: fleet)
+    monkeypatch.setattr(operator, "wait_stationary_lead_in", lambda *_: True)
+
+    def interrupt(*_):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", interrupt)
+    with pytest.raises(EOFError):
+        operator.record_relocation(config, trial.name, state)
+    assert capsys.readouterr().out.count("Move the carrier now") == 1
+    persisted = load(journal)
+    assert persisted["relocation_prompt_opened"]["monotonic_ns"] > 0
+    assert source.claim_relocation_prompt(config, trial.name, capture) == (persisted, False)
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("A reopened prompt requested fresh input"))
+    assert operator.record_relocation(config, trial.name, persisted) == persisted
+    assert "Move the carrier now" not in capsys.readouterr().out
+    fleet["phase"] = "complete"
+    monkeypatch.setattr(replay, "fleet_manifest", lambda *_: fleet)
+    monkeypatch.setattr(replay, "native_status", lambda *_: dict.fromkeys(("recording_active", "teleoperation_active", "policy_active"), False))
+    reviewed = []
+    monkeypatch.setattr(replay, "prepare_native_arm", lambda *_, **kw: reviewed.append(kw["motor_only"]))
+    result = replay.predict_selected(config, trial.name)
+    assert result["status"] == "incomplete" and "without a confirmation" in result["reason"]
+    assert load(journal)["markers"] == {"placement_closed": placement}
+    assert reviewed == [True]
+
+
+def test_tank_clip_keeps_two_observations_after_settling():
+    nanosecond = 10**9
+    phase = {"fleet_launch_requested": {"monotonic_ns": 10 * nanosecond},
+             "fleet_acknowledgement": {"monotonic_ns": 11 * nanosecond}, "fleet_window_s": 60,
+             "markers": {"placement_closed": {"monotonic_ns": 8 * nanosecond},
+                         "relocation_closed": {"monotonic_ns": 25 * nanosecond}}}
+    old_bounds = source.mobile_phase_bounds(phase, 40 * nanosecond)
+    phase["fleet_settled_window_s"] = 4
+    assert source.mobile_phase_bounds(phase, 40 * nanosecond) == (
+        (old_bounds[0][0], 29 * nanosecond), (29 * nanosecond, old_bounds[1][1]))
+    samples = [{"received_ns": second * nanosecond + 70,
+                "exposure_bounds_ns": (second * nanosecond - 20, second * nanosecond + 20)}
+               for second in (12, 14, 16, 18, 19, 20, 22, 24, 25, 26, 27)]
+    with pytest.raises(ValueError, match="1 of 2 required settled"):
+        replay.select_fleet_clip(samples[:-1], 8, "tank-1", phase, {})
+    proof = {}
+    selected = replay.select_fleet_clip(samples, 8, "tank-1", phase, proof)
+    assert len(selected) == 8 and selected[-2:] == samples[-2:]
+    assert samples[-3] not in selected
+    assert proof["settled_selected"] == proof["settled_eligible"] == 2
 
 
 def test_native_archive_retry_keeps_the_original_when_explorer_readback_fails(tmp_path):
@@ -424,9 +526,15 @@ def test_reveal_resumes_from_native_manifest_without_new_observation(monkeypatch
                                       "target_state_time_or_interval": interval(15, 20, clock),
                                       "relations_preserved_until_reveal": True})
     recorder.close(10, 15, 20)
-    atomic(trial / "trial.json", {"status": "pending_reveal", "decision": decision, "query_ns": 10})
+    atomic(trial / "trial.json", {"status": "pending_reveal", "decision": decision, "query_ns": 10,
+                                 "homebrain_boot_id": clock["boot_id"]})
     monkeypatch.setattr(replay, "card_for", lambda *_: None)
+    monkeypatch.setattr(source, "homebrain_boot", lambda: "later-boot")
     monkeypatch.setattr(replay, "capture_clip", lambda *_: pytest.fail("A sealed reveal needs no new image"))
+    sealed = (root / "manifest.json").read_bytes()
+    assert replay.predict_selected(config, trial.name) == decision
+    assert load(trial / "trial.json")["status"] == "complete"
+    assert (root / "manifest.json").read_bytes() == sealed
     with pytest.raises(ValueError, match="already has a sealed outcome"):
         replay.close_interrupted_story(config, trial.name, "Interrupted test")
     assert load(trial / "trial.json")["observed_terminal_outcome"] == "surface"
@@ -743,3 +851,32 @@ def test_physical_steps_preserve_recording_from_an_older_homebrain_boot(monkeypa
     monkeypatch.setattr(source, "homebrain_boot", lambda: "current-boot")
     monkeypatch.setattr(operator, "is_capturing", lambda *_: pytest.fail("The old recording cannot prompt for motion"))
     assert operator.physical_steps({}, "existing", state) is state
+
+
+def test_reboot_in_mobile_phase_keeps_bound_placement_for_motor_review(monkeypatch, tmp_path):
+    config = {"data_root": tmp_path}
+    card = source.prepare(config)["cards"][0]
+    trial = source.story_workspace(config) / card["story_id"]
+    trial.mkdir()
+    placement = {"observed_placement_outcome": "placement_succeeded"}
+    receipt = {"episode_id": "original-arm-episode"}
+    state = {"status": "recording", "card": card, "homebrain_boot_id": "earlier-boot",
+             "markers": {"placement_closed": placement}, "staged_studio_recording": receipt}
+    atomic(trial / "trial.json", state)
+    calls = []
+
+    def review(_, target, current, *, motor_only):
+        assert target == trial and motor_only and current["staged_studio_recording"] == receipt
+        calls.append(receipt)
+        atomic(trial / "motor-intake.json", {"status": "pending_review"})
+
+    monkeypatch.setattr(source, "homebrain_boot", lambda: "current-boot")
+    monkeypatch.setattr(replay, "native_status", lambda *_: pytest.fail("Reboot recovery opened live observation"))
+    monkeypatch.setattr(replay, "prepare_native_arm", review)
+    result = replay.predict_selected(config, trial.name)
+    saved = load(trial / "trial.json")
+    assert saved["markers"] == {"placement_closed": placement}
+    assert saved["status"] == "incomplete" and "rebooted" in result["reason"]
+    assert saved["observed_terminal_outcome"] == "unknown"
+    assert load(trial / "motor-intake.json")["status"] == "pending_review"
+    assert replay.predict_selected(config, trial.name) == result and calls == [receipt]

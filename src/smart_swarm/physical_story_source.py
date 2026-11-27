@@ -18,7 +18,7 @@ from .fleet_adapter import data, native_team_status
 from .native_fleet_start import START_GATE
 from .physical_story_condition import CHANGE_VALUES, OBSERVED_CHANGE
 from .physical_story_plan import PLAN_VERSION, ROOT, prepare
-from .studio import native_controls_idle, native_request, require_recording_lease
+from .studio import native_controls_idle, native_episode_snapshot, native_request, native_status, require_recording_lease
 
 TITLE = "Smart Swarm / Distributed visual stories v1"
 TASK = "Use the attended story card for the SO101 placement attempt and withdraw."
@@ -27,6 +27,8 @@ ACTIVE_STORY_STATES = ("placement_recording", "preparing", "recording", "pending
 FLEET_TERMINAL = ("complete", "failed", "interrupted")
 FLEET_WINDOW_S = 60
 STATIONARY_LEAD_IN_S = 12
+SETTLED_TANK_S = 4
+SETTLED_TANK_FRAMES = 2
 
 
 class StudioEpisodeUnlinked(ValueError):
@@ -69,8 +71,8 @@ def story_update(action):
 
 
 def learned_story_progress(trial, state):
-    from .physical_learned import DEFERRED
-    from .physical_offline import read_replay
+    from .physical_learned import DEFERRED, online_failure_fields
+    from .physical_offline import read_replay, retry_state
 
     learned = state.get("decision", {}).get("learned_evidence", {})
     result = {"learned_evidence_status": learned.get("status", "no_learned_forecast")}
@@ -81,12 +83,14 @@ def learned_story_progress(trial, state):
             replay = read_replay(trial / "private-replay")
             if replay is not None:
                 result.update(learned_evidence_status="scored", learned_forecast_mode="blind_offline")
+            else:
+                retry = retry_state(trial, learned)
+                if "status" in retry:
+                    result.update(blind_offline_queue=retry["status"], learned_forecast_reason=retry["reason"],
+                                  blind_offline_worker_timeouts=retry["worker_timeouts"])
         except (OSError, ValueError, TypeError, KeyError, ProtocolError) as error:
             result.update(learned_evidence_status="invalid_blind_offline_receipt", learned_forecast_reason=str(error))
-    failure = learned.get("online_attempt")
-    if isinstance(failure, dict) and isinstance(failure.get("reason"), str):
-        result["online_admission_failure"] = failure["reason"]
-    return result
+    return {**result, **online_failure_fields(learned)}
 
 
 def story_progress(config):
@@ -247,11 +251,8 @@ def launch_fleet(config, directory):
     return None
 
 
-def story_readiness(config):
-    team = native_team_status(config, probe_rosmaster=False)
+def device_blockers(team):
     studio = team["so101_studio"]
-    attended = attended_status(config, studio)
-    rgb = team["story_observation_readiness"]
     missing = [name for name, present in studio["inventory_present"].items() if not present]
     issues = []
     if studio["native_stop_check_required"]:
@@ -269,13 +270,26 @@ def story_readiness(config):
     preview = studio.get("native_camera_preview", {})
     issues.extend(("OFFLINE", f"Studio {key} has no fresh camera-only preview")
                   for key, row in preview.items() if not row["fresh"])
+    return issues
+
+
+def story_readiness(config):
+    team = native_team_status(config, probe_rosmaster=False)
+    studio = team["so101_studio"]
+    attended = attended_status(config, studio)
+    rgb = team["story_observation_readiness"]
+    issues = device_blockers(team)
     issues.extend(("OFFLINE", issue) for issue in rgb["issues"])
     installation = recording_installation(config)
     storage = fleet_storage_blocker(installation["native_capture_storage"])
     if storage:
         issues.append(storage)
-    return {"scope": "read-only distributed story readiness", "ready_for_native_lease_check": not issues,
-            "status": "SOFTWARE_READY_HARDWARE_UNAVAILABLE" if issues else "SOFTWARE_READY_AWAITING_ATTENDED_CHECK",
+    lease_ready = not issues
+    available = recording_reservation_check(config, issues)
+    status = "READY_FOR_STORY_COLLECTION" if attended["current"] else "SOFTWARE_READY_AWAITING_ATTENDED_CHECK"
+    return {"scope": "read-only distributed story readiness", "ready_for_native_lease_check": lease_ready,
+            "status": "SOFTWARE_READY_HARDWARE_UNAVAILABLE" if issues else status,
+            "recording_reservation_available": available,
             "blocking_issues": [{"code": code, "reason": reason} for code, reason in issues],
             "so101_studio": {**studio, "physical_preflight_verified": attended["current"]}, "mobile_rgb_and_clocks": rgb,
             "active_native_capture": team["active_native_capture"],
@@ -285,6 +299,20 @@ def story_readiness(config):
                                              team.get("capture_volume_reference")),
             "attended_so101_check": attended, "pending_attended_checks": pending_attended_setup(attended),
             "motion_requested": False, "recording_started": False}
+
+
+def recording_reservation_check(config, issues):
+    if issues:
+        return None
+    try:
+        require_recording_lease(config)
+    except ProtocolError as error:
+        issues.append((error.code, error.message))
+        return False
+    except OSError as error:
+        issues.append(("OFFLINE", f"Studio recorder reservation check failed. {error}"))
+        return False
+    return True
 
 
 def pending_attended_setup(so101):
@@ -359,7 +387,7 @@ def recording_installation(config):
             "native_capture_storage": fleet_capacity(config),
             "secondary_archive_storage": {"volume": str(volume), "mounted": mounted,
                                           "free_bytes": disk_usage(volume).free if mounted else None} if volume else None,
-            "recorder_reservation": "Checked at attended start by Studio's native reservation",
+            "recorder_reservation": "Checked through Studio after device and storage checks and again before capture",
             "observation_endpoint": "/api/fleet/live", "capture_inventory_endpoint": "/api/fleet/captures"}
 
 
@@ -418,12 +446,14 @@ def story_readiness_with_transport(config):
     return report
 
 
-def story_preflight(config):
+def story_preflight(config, *, require_attended=True):
     readiness = story_readiness(config)
     blockers = readiness["blocking_issues"]
     if blockers:
         raise ProtocolError(blockers[0]["code"], ". ".join(item["reason"] for item in blockers))
-    require_recording_lease(config)
+    attended = readiness["attended_so101_check"]
+    if require_attended and not attended["current"]:
+        raise ProtocolError("OFFLINE", attended["reason"])
 
 
 def prepare_trial_folder(trial):
@@ -468,6 +498,20 @@ def request_fleet_start(config, trial, state):
     return state
 
 
+def bind_saved_placement(config, trial, state):
+    studio = native_status(config)
+    native_controls_idle(studio)
+    if studio["native_arm_hardware_open"] or studio["native_stop_check_required"]:
+        raise ProtocolError("RESOURCE_BUSY", "Finish Studio control and verify native STOP before saving the placement source")
+    episode = corresponding_native_episode(config, state)
+    if episode["metadata"].get("status") != "complete":
+        raise ValueError("Wait for Studio to finish saving the matching episode")
+    if "staged_studio_recording" not in state:
+        identity = staged_episode_snapshot(config, state, episode)
+        state.update(staged_studio_episode_id=episode["id"], staged_studio_recording=identity)
+        atomic(trial / "trial.json", state)
+
+
 @story_update
 def start_relocation(config, identifier):
     card_for(config, identifier)
@@ -477,11 +521,14 @@ def start_relocation(config, identifier):
         raise ValueError("Finish the Studio placement phase before starting Explorer")
     if not same_recording_boot(state):
         raise ValueError("Homebrain rebooted before the mobile observation phase")
-    story_preflight(config)
-    episode = corresponding_native_episode(config, state)
-    if episode["metadata"].get("status") != "complete":
-        raise ValueError("Wait for Studio to finish saving the matching episode")
-    state.update(status="preparing", fleet_launch_requested=anchor(), staged_studio_episode_id=episode["id"])
+    bind_saved_placement(config, trial, state)
+    try:
+        story_preflight(config, require_attended=False)
+    except (OSError, ValueError, ProtocolError) as error:
+        state["reason"] = error.message if isinstance(error, ProtocolError) else str(error)
+        atomic(trial / "trial.json", state)
+        raise
+    state.update(status="preparing", fleet_launch_requested=anchor(), fleet_settled_window_s=SETTLED_TANK_S)
     atomic(trial / "trial.json", state)
     return request_fleet_start(config, trial, state)
 
@@ -495,6 +542,15 @@ def story_phases(state):
     return ("insertion_closed", *PHASES) if state["card"]["family"] == "F3" else PHASES
 
 
+def settled_tank_start(state):
+    duration = state.get("fleet_settled_window_s")
+    if duration is None:
+        return None
+    if duration != SETTLED_TANK_S or "fleet_launch_requested" not in state:
+        raise ValueError("Invalid native Tank settling window")
+    return state["markers"]["relocation_closed"]["monotonic_ns"]
+
+
 def mobile_phase_bounds(state, query_ns):
     begin = state["markers"]["placement_closed"]["monotonic_ns"]
     moved = state["markers"]["relocation_closed"]["monotonic_ns"]
@@ -504,6 +560,11 @@ def mobile_phase_bounds(state, query_ns):
         if not begin <= launch <= acknowledged or state["fleet_window_s"] != FLEET_WINDOW_S:
             raise ValueError("The staged mobile capture does not follow the saved Studio phase")
         begin = acknowledged
+    settled = settled_tank_start(state)
+    if settled is not None:
+        if not begin < settled:
+            raise ValueError("Tank's settled window must follow the start of the mobile phase")
+        moved = settled + SETTLED_TANK_S * 1_000_000_000
     if not begin < moved < query_ns:
         raise ValueError("The native placement, relocation and query windows are out of order")
     return (begin, moved), (moved, query_ns)
@@ -517,6 +578,27 @@ def stage_allows_marker(config, state, phase):
     if "fleet_launch_requested" in state:
         return phase == "relocation_closed" and fleet_manifest(config, state["fleet_capture_id"])["phase"] == "recording"
     return True
+
+
+@story_update
+def claim_relocation_prompt(config, identifier, capture_id, *, withheld=None):
+    card_for(config, identifier)
+    journal = story_workspace(config) / identifier / "trial.json"
+    state = load(journal)
+    if (state["status"] != "recording" or state["fleet_capture_id"] != capture_id
+            or "placement_closed" not in state["markers"] or not same_recording_boot(state)):
+        raise ValueError("The native recording changed before the relocation prompt")
+    if ("relocation_closed" in state["markers"] or "relocation_prompt_opened" in state
+            or "relocation_prompt_withheld" in state):
+        return state, False
+    if withheld is None:
+        if not stage_allows_marker(config, state, "relocation_closed"):
+            return state, False
+        state["relocation_prompt_opened"] = anchor()
+    else:
+        state["relocation_prompt_withheld"] = withheld
+    atomic(journal, state)
+    return state, withheld is None
 
 
 @story_update
@@ -548,17 +630,31 @@ def mark(config, identifier, phase, *, assistance=None, placement_outcome=None, 
     return state
 
 
+def staged_episode_snapshot(config, state, episode):
+    from .physical_motor_prefix import episode_directory
+
+    location = episode_directory(config, {**state, "native_episode_id": episode["id"]})
+    identity = native_episode_snapshot(location / "episode.json", expected_metadata=episode["metadata"])
+    if identity["episode_id"] != episode["id"] or identity["frames_sha256"] != episode["metadata"].get("frames_sha256"):
+        raise ValueError("The exact saved Studio episode differs from its native catalogue entry")
+    return identity
+
+
 def corresponding_native_episode(config, state, *, boundary="placement_closed"):
     available = episode_ids(config, state["studio_dataset_id"])
     prior = set(state["preexisting_native_episode_ids"])
     lower = state["start"]["monotonic_ns"]
     upper = state["markers"][boundary]["monotonic_ns"]
-    candidates = [row for key, row in available.items() if key not in prior and row["storage"] == "episodes"]
+    expected = state.get("staged_studio_episode_id")
+    sealed = state.get("staged_studio_recording")
+    candidates = [row for key, row in available.items() if key not in prior and row["storage"] == "episodes"
+                  and (sealed is None or key == expected)]
     matching = [row for row in candidates if lower <= row["metadata"]["first_timestamp_ns"] < upper
                 <= row["metadata"]["last_timestamp_ns"] + 2_000_000_000]
     if len(matching) != 1:
         raise StudioEpisodeUnlinked("Exactly one newly saved native Studio episode must cover the declared placement window")
-    expected = state.get("staged_studio_episode_id")
     if expected and matching[0]["id"] != expected:
         raise StudioEpisodeUnlinked("The Studio episode changed after the mobile observation phase started")
+    if sealed is not None and staged_episode_snapshot(config, state, matching[0]) != sealed:
+        raise ValueError("The exact Studio recording changed after the placement was saved")
     return matching[0]

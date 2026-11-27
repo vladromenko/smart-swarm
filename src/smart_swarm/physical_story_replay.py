@@ -17,9 +17,10 @@ from .physical_motor_prefix import CAMERA_ORDER as ARM_CAMERAS, episode_director
 from .physical_reveal import FIELD as REVEAL_FIELD, PROFILE as REVEAL_PROFILE, capture_clip, store_clip, validate_sealed_clip
 from .physical_slot_reference import SCOPE_FLAG, adapt_rule, slot_reference, verify_decision_reference
 from .physical_story_condition import PHASE_DIGEST, phase_digest, verify_phase_digest
-from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, StudioEpisodeUnlinked, anchor, card_for, corresponding_native_episode,
+from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, SETTLED_TANK_FRAMES, StudioEpisodeUnlinked,
+                                    anchor, card_for, corresponding_native_episode,
                                     fleet_manifest, homebrain_boot, mobile_phase_bounds, restore_start, same_recording_boot,
-                                    save_incomplete, story_phases, story_update, story_workspace)
+                                    save_incomplete, settled_tank_start, story_phases, story_update, story_workspace)
 from .studio import native_controls_idle, native_status, validate_story_episode
 from .vision import insertion, relocation
 
@@ -83,6 +84,21 @@ def placement_samples(samples, state):
     return selected(samples, 8)
 
 
+def select_fleet_clip(eligible, required, agent, state, report):
+    settled = settled_tank_start(state) if agent == AGENTS[1] else None
+    if settled is None:
+        return selected(eligible, required)
+    earlier = [row for row in eligible if row["received_ns"] <= settled]
+    later = [row for row in eligible if row["exposure_bounds_ns"][0] >= settled]
+    report.update(settled_after_ns=settled, settled_eligible=len(later))
+    if len(later) < SETTLED_TANK_FRAMES:
+        raise ValueError(f"{agent} retained {len(later)} of {SETTLED_TANK_FRAMES} required settled RGB samples after confirmation")
+    if len(earlier) < required - SETTLED_TANK_FRAMES:
+        raise ValueError(f"{agent} retained only {len(earlier)} RGB samples before relocation confirmation")
+    report["settled_selected"] = SETTLED_TANK_FRAMES
+    return [*selected(earlier, required - SETTLED_TANK_FRAMES), *selected(later, SETTLED_TANK_FRAMES)]
+
+
 def fleet_clips(config, recorder, state, agent, through, fleet, audit, *, current_anchor=None):
     archive = FleetArchive(config, state["fleet_capture_id"], agent)
     start = state["start"]
@@ -96,7 +112,7 @@ def fleet_clips(config, recorder, state, agent, through, fleet, audit, *, curren
     if len(eligible) < required:
         raise ValueError(f"{agent} retained {len(eligible)} of {required} required RGB samples within its native phase")
     result = []
-    for item in selected(eligible, required):
+    for item in select_fleet_clip(eligible, required, agent, state, audit[agent]):
         picture = rgb(BytesIO(archive.image(item["frame_ref"], through_s=item["after_s"])))
         name = f"{agent}/front"
         packet = recorder.fleet_packet(agent, name, picture, item)
@@ -174,8 +190,10 @@ def prepare_native_arm(config, trial, state, *, motor_only=False):
     row = corresponding_native_episode(config, state, boundary=boundary)
     location = episode_directory(config, {**state, "native_episode_id": row["id"]})
     proof = validate_story_episode(config, location)
+    sealed = state.get("staged_studio_recording")
     if (proof["episode_id"] != row["id"] or proof["dataset_id"] != state["studio_dataset_id"]
-            or proof["frames_sha256"] != row["metadata"]["frames_sha256"]):
+            or proof["frames_sha256"] != row["metadata"]["frames_sha256"]
+            or (sealed is not None and proof["episode_metadata_sha256"] != sealed["episode_manifest_sha256"])):
         raise ValueError("The Studio episode inventory and saved native bytes disagree")
     state.update(native_episode_id=row["id"], native_story_validation=proof)
     queue_motor_review(config, trial, state)
@@ -203,14 +221,17 @@ def incomplete_result(state):
     return {"status": "incomplete", "reason": state["reason"], "motor_segment_admitted": state.get("motor_segment_admitted", False)}
 
 
-def capture_failure(fleet, missing, *, withheld=None):
+def capture_failure(fleet, missing, *, withheld=None, prompt_opened=False):
     reasons = []
     if fleet["phase"] != "complete" or not fleet.get("readback", {}).get("passed"):
         reasons.append(fleet.get("error") or "Explorer native observation readback did not pass")
     if missing:
         reasons.append(f"Native capture ended before these phases were recorded: {', '.join(missing)}")
-    if withheld and "relocation_closed" in missing:
-        reasons.append(withheld)
+    if "relocation_closed" in missing:
+        if withheld:
+            reasons.append(withheld)
+        elif prompt_opened:
+            reasons.append("Relocation opened without a confirmation during native capture")
     return ". ".join(reasons)
 
 
@@ -296,17 +317,22 @@ def recover_pending_prediction(trial, state):
     return decision
 
 
+def close_after_reboot(config, trial, state):
+    if state["status"] == "placement_recording":
+        return preserve_finished_prefix(config, trial, state, "Homebrain rebooted before the mobile observation phase")
+    reason = "Homebrain rebooted before recording and reveal completed"
+    if state.get("staged_studio_recording") and not (trial / "motor-intake.json").is_file():
+        return preserve_finished_prefix(config, trial, state, reason)
+    return incomplete_story(trial, state, reason)
+
+
 @story_update
 def predict_selected(config, identifier):
     card_for(config, identifier)
     trial = story_workspace(config) / identifier
-    state = restore_start(config, trial, load(trial / "trial.json"))
+    state = reopen_story(config, trial)
     if state["status"] in ("placement_recording", "recording", "pending_reveal") and not same_recording_boot(state):
-        if state["status"] == "placement_recording":
-            return preserve_finished_prefix(config, trial, state, "Homebrain rebooted before the mobile observation phase")
-        if state["status"] == "recording":
-            recover_pending_prediction(trial, state)
-        return incomplete_story(trial, state, "Homebrain rebooted before recording and reveal completed")
+        return close_after_reboot(config, trial, state)
     if state["status"] in ("pending_reveal", "complete"):
         return state["decision"]
     if state["status"] == "incomplete":
@@ -315,15 +341,13 @@ def predict_selected(config, identifier):
         raise ValueError("Save and stop Studio, then resume this card in the launcher to start Explorer")
     if state["status"] != "recording":
         raise ValueError("Wait for the existing native capture to acknowledge start")
-    saved = recover_pending_prediction(trial, state)
-    if saved is not None:
-        return saved
     native_controls_idle(native_status(config))
     fleet = fleet_manifest(config, state["fleet_capture_id"])
     if fleet["phase"] not in FLEET_TERMINAL:
         raise ValueError("Wait for the existing Explorer capture and readback to finish")
     missing = [phase for phase in story_phases(state) if phase not in state["markers"]]
-    reason = capture_failure(fleet, missing, withheld=state.get("relocation_prompt_withheld"))
+    reason = capture_failure(fleet, missing, withheld=state.get("relocation_prompt_withheld"),
+                             prompt_opened="relocation_prompt_opened" in state)
     if reason:
         return preserve_finished_prefix(config, trial, state, reason)
     return project_ready(config, trial, state, fleet)
@@ -394,12 +418,16 @@ def unverified_reveal(trial, state, reason="Operator could not confirm the queri
     return state
 
 
-@story_update
-def recover_story(config, trial):
+def reopen_story(config, trial):
     state = restore_start(config, trial, load(trial / "trial.json"))
     if state["status"] == "recording":
         recover_pending_prediction(trial, state)
     return recover_sealed_reveal(trial, state)
+
+
+@story_update
+def recover_story(config, trial):
+    return reopen_story(config, trial)
 
 
 @story_update

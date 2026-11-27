@@ -1,0 +1,827 @@
+{
+  "capture_design_sha256": "b4dfdd13ed5a1d9084c41acfa53032386666c8e1f6a13f909192752c40c87b9a",
+  "cases": [
+    {
+      "contact_trace_sha256": "7270defb63fa4cb0f7a6093e04148d934af0eb2c53a12b6b1e3431e1afa02ae2",
+      "manifest_sha256": "919933ea863f04905a83fe77778e95ef8043d6e17bbefa15a6a29ad02da52893",
+      "owner_condition": "tank-1",
+      "physics": {
+        "bilateral_samples_all": 0,
+        "maximum_cube_height_m": 0.015999576005994026,
+        "supported_lift_carry_samples": 0,
+        "verified_terminal": "surface"
+      },
+      "replies": {
+        "events_only": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99747401,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99747401,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "cyan_left",
+            "reported_probability": 0.99992156,
+            "sender": "tank-1",
+            "visual_support": true
+          },
+          "transmitted_bytes_unchanged": 1922
+        },
+        "events_plus_reveal": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99743384,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99743384,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.002469135802469136,
+                "left": 0.24938271604938278,
+                "outside": 0.002469135802469136,
+                "right": 0.24938271604938278,
+                "surface": 0.49629629629629635
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "cyan_left",
+            "reported_probability": 0.99995852,
+            "sender": "tank-1",
+            "visual_support": true
+          },
+          "transmitted_bytes_unchanged": 1922
+        }
+      },
+      "source_group": "witness-transfer-reframe-731170",
+      "task": "missed_grasp"
+    },
+    {
+      "contact_trace_sha256": "7270defb63fa4cb0f7a6093e04148d934af0eb2c53a12b6b1e3431e1afa02ae2",
+      "manifest_sha256": "a49624bd67285027c32cdc27153fb88a42d6ef23bc5aab9678ad46aab974076b",
+      "owner_condition": "tank-2",
+      "physics": {
+        "bilateral_samples_all": 0,
+        "maximum_cube_height_m": 0.015999576005994026,
+        "supported_lift_carry_samples": 0,
+        "verified_terminal": "surface"
+      },
+      "replies": {
+        "events_only": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99747401,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99747401,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "violet_left",
+            "reported_probability": 0.99015021,
+            "sender": "tank-1",
+            "visual_support": false
+          },
+          "transmitted_bytes_unchanged": 1922
+        },
+        "events_plus_reveal": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99743384,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99743384,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "violet_left",
+            "reported_probability": 0.97297931,
+            "sender": "tank-1",
+            "visual_support": false
+          },
+          "transmitted_bytes_unchanged": 1922
+        }
+      },
+      "source_group": "witness-transfer-reframe-731170",
+      "task": "missed_grasp"
+    },
+    {
+      "contact_trace_sha256": "2760d1574be23f6eeb8a65b18080b461fdf496532f06014741c6f20d0baec269",
+      "manifest_sha256": "12f2b98baa2c8113464db2619292086f26b14542476705189a2c9cc6d7dd3995",
+      "owner_condition": "tank-1",
+      "physics": {
+        "bilateral_samples_all": 13,
+        "maximum_cube_height_m": 0.13895305337119848,
+        "supported_lift_carry_samples": 10,
+        "verified_terminal": "surface"
+      },
+      "replies": {
+        "events_only": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99626029,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99626029,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "cyan_left",
+            "reported_probability": 0.99988782,
+            "sender": "tank-1",
+            "visual_support": true
+          },
+          "transmitted_bytes_unchanged": 1922
+        },
+        "events_plus_reveal": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.95915735,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.95915735,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.002469135802469136,
+                "left": 0.24938271604938278,
+                "outside": 0.002469135802469136,
+                "right": 0.24938271604938278,
+                "surface": 0.49629629629629635
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "cyan_left",
+            "reported_probability": 0.99996388,
+            "sender": "tank-1",
+            "visual_support": true
+          },
+          "transmitted_bytes_unchanged": 1922
+        }
+      },
+      "source_group": "witness-transfer-731092",
+      "task": "early_release"
+    },
+    {
+      "contact_trace_sha256": "2760d1574be23f6eeb8a65b18080b461fdf496532f06014741c6f20d0baec269",
+      "manifest_sha256": "7f5dea91e57a43bf69e6c0ae88a986678ab8d3cc9f761dee141ad2b373297cc5",
+      "owner_condition": "tank-2",
+      "physics": {
+        "bilateral_samples_all": 13,
+        "maximum_cube_height_m": 0.13895305337119848,
+        "supported_lift_carry_samples": 10,
+        "verified_terminal": "surface"
+      },
+      "replies": {
+        "events_only": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.99626029,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.99626029,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "violet_left",
+            "reported_probability": 0.80127025,
+            "sender": "tank-1",
+            "visual_support": false
+          },
+          "transmitted_bytes_unchanged": 1922
+        },
+        "events_plus_reveal": {
+          "arm_report": {
+            "delivered_ns": 23080000000,
+            "reported_label": "surface",
+            "reported_probability": 0.95915735,
+            "sender": "so101-1",
+            "visual_support": true
+          },
+          "arm_surface_probability": 0.95915735,
+          "conditions": {
+            "both_replies": {
+              "belief": {
+                "held": 0.0014868660168511477,
+                "left": 0.08342970427886996,
+                "outside": 0.0014868660168511477,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "no_delivered_replies": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            },
+            "only_arm_containment": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface"
+            },
+            "only_tank_assignment": {
+              "belief": {
+                "held": 0.0024691358024691358,
+                "left": 0.24938271604938272,
+                "outside": 0.0024691358024691358,
+                "right": 0.24938271604938272,
+                "surface": 0.4962962962962963
+              },
+              "decision": "request_inspection"
+            }
+          },
+          "saved_adaptive": {
+            "empirical_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            },
+            "learned_channel_expected_risk": {
+              "belief": {
+                "held": 0.001486866016851148,
+                "left": 0.08342970427886996,
+                "outside": 0.001486866016851148,
+                "right": 0.08342970427886996,
+                "surface": 0.8301668594085577
+              },
+              "decision": "surface",
+              "reply_factors": [
+                "containment"
+              ]
+            }
+          },
+          "tank_report": {
+            "delivered_ns": 23110000000,
+            "reported_label": "cyan_left",
+            "reported_probability": 0.99985063,
+            "sender": "tank-1",
+            "visual_support": false
+          },
+          "transmitted_bytes_unchanged": 1922
+        }
+      },
+      "source_group": "witness-transfer-731092",
+      "task": "early_release"
+    }
+  ],
+  "diagnostic_prelabel_sha256": "1a0f59fa16b9dccd4c161aa997bcfc5d4d515671cf85451c03ef29b2e4044de5",
+  "new_model_inference": 0,
+  "new_recordings": 0,
+  "optimizer_updates": 0,
+  "predictions_sha256": "bc7ac4ceaf162b4a5d568f28f67c2b3000a1aa808ac7e3f63c16070982d4c704",
+  "publication": {
+    "original_receipt_sha256": "9e5b08729a831ab07fa4b4fc88acfc026820db124322050dffbeb2ffba0d018e",
+    "scope": "Source paths omitted from the public result"
+  },
+  "reply_window_ms": 90,
+  "scope": "Exploratory reply-drop replay on the two previously scored surface sources",
+  "score_sha256": "205df427f080af133c3e0abc6470623ef99b0f80758fd8605ea60fd17d75f481",
+  "summary": {
+    "early_release": {
+      "camera_variants": 2,
+      "independent_groups": 1,
+      "supported_lift_carry_samples": [
+        10,
+        10
+      ],
+      "surface_answers_by_head_and_reply_condition": {
+        "events_only": {
+          "both_replies": 2,
+          "no_delivered_replies": 0,
+          "only_arm_containment": 2,
+          "only_tank_assignment": 0
+        },
+        "events_plus_reveal": {
+          "both_replies": 2,
+          "no_delivered_replies": 0,
+          "only_arm_containment": 2,
+          "only_tank_assignment": 0
+        }
+      }
+    },
+    "missed_grasp": {
+      "camera_variants": 2,
+      "independent_groups": 1,
+      "supported_lift_carry_samples": [
+        0,
+        0
+      ],
+      "surface_answers_by_head_and_reply_condition": {
+        "events_only": {
+          "both_replies": 2,
+          "no_delivered_replies": 0,
+          "only_arm_containment": 2,
+          "only_tank_assignment": 0
+        },
+        "events_plus_reveal": {
+          "both_replies": 2,
+          "no_delivered_replies": 0,
+          "only_arm_containment": 2,
+          "only_tank_assignment": 0
+        }
+      }
+    }
+  }
+}

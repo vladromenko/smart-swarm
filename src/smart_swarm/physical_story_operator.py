@@ -3,15 +3,15 @@
 from math import ceil
 import time
 
-from .episode import atomic, load
+from .episode import load
 from .native_fleet_start import START_GATE, START_RECEIPT, valid_start_receipt
 from .physical_learned import DEFERRED
 from .physical_story_condition import CARRIER_MOVE, RELOCATION_CHECKS, REMOVAL
 from .physical_story_motor import review_pending_motor
 from .physical_story_plan import prepare
 from .physical_story_replay import OUTCOMES, close_interrupted_story, predict_selected, recover_story, terminal_reveal
-from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, STATIONARY_LEAD_IN_S, TITLE, begin,
-                                    fleet_manifest, mark, same_recording_boot, start_relocation,
+from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, SETTLED_TANK_S, STATIONARY_LEAD_IN_S, TITLE, begin,
+                                    claim_relocation_prompt, fleet_manifest, mark, same_recording_boot, start_relocation,
                                     story_preflight, story_workspace)
 
 
@@ -146,13 +146,24 @@ def wait_stationary_lead_in(config, state):
 
 
 def record_relocation(config, identifier, state):
+    if "relocation_prompt_opened" in state or "relocation_prompt_withheld" in state:
+        print("Keep the scene fixed. Waiting for the existing native capture to finish.")
+        return state
+    capture = state["fleet_capture_id"]
     if not wait_stationary_lead_in(config, state):
         if state.get("fleet_rgb_start_gate"):
-            state["relocation_prompt_withheld"] = "The live recording did not confirm a usable RGB start with time left for relocation"
-            atomic(story_workspace(config) / identifier / "trial.json", state)
+            reason = "The live recording did not confirm a usable RGB start with time left for relocation"
+            state, _ = claim_relocation_prompt(config, identifier, capture, withheld=reason)
+        return state
+    state, granted = claim_relocation_prompt(config, identifier, capture)
+    if not granted:
+        print("Keep the scene fixed. Waiting for the existing native capture to finish.")
         return state
     print(carrier_instruction(state["card"]))
-    print("Move the carrier now. Hold the settled destination for three seconds so Tank can record it, then confirm.")
+    if state.get("fleet_settled_window_s"):
+        print(f"Move the carrier now. Confirm once it settles. Tank records the next {SETTLED_TANK_S} seconds.")
+    else:
+        print("Move the carrier now. Hold the settled destination for three seconds so Tank can record it, then confirm.")
     print("Keep the final scene still for ROSMASTER until Explorer finishes.")
     expected = RELOCATION_CHECKS.get(state["card"]["family"], CARRIER_MOVE)
     assistance, observed = observe_motion("relocation", "human_relocation", expected, unknown_actor="unknown")
@@ -173,8 +184,17 @@ def observe_placement(when):
 
 def observe_motion(phase, human, expected, *, unknown_actor=None):
     print(f"Confirm only if you saw {expected}.")
-    response = input(f"After {phase}, enter h for hands or r for robot. Add d if different or u if unclear. "
-                     "Use n for no movement, or Enter if both are unknown: ").strip().lower()
+    prompt = (f"After {phase}, enter h for hands or r for robot. Add d if different or u if unclear. "
+              "Use n for no movement, or Enter if both are unknown: ")
+    result = motion_response(input(prompt), human, unknown_actor)
+    while result is None:
+        print("Use h, r, hd, rd, hu, ru, n or Enter to confirm the same observation.")
+        result = motion_response(input(prompt), human, unknown_actor)
+    return result
+
+
+def motion_response(text, human, unknown_actor):
+    response = text.strip().lower()
     if not response:
         return unknown_actor, "unknown"
     if response == "n":
@@ -182,7 +202,7 @@ def observe_motion(phase, human, expected, *, unknown_actor=None):
     source = {"h": human, "r": "attended_native_motion"}.get(response[0])
     observation = {"": "confirmed", "d": "different", "u": "unknown"}.get(response[1:])
     if source is None or observation is None:
-        raise ValueError(f"Use h, r, hd, rd, hu, ru, n or Enter to record {phase}")
+        return None
     return source, observation
 
 
@@ -263,7 +283,8 @@ def show_selected_card(card, state):
     markers = state["markers"] if state else {}
     if "placement_closed" not in markers:
         print(card["placement"])
-    if "relocation_closed" not in markers:
+    interrupted_prompt = state and ("relocation_prompt_opened" in state or "relocation_prompt_withheld" in state)
+    if "relocation_closed" not in markers and not interrupted_prompt:
         print(carrier_instruction(card))
         print(card["relocation"])
 
@@ -292,9 +313,17 @@ def run(config, *, evaluation_mode="online"):
 
 def record_or_resume(config, identifier, state):
     if state["status"] == "placement_recording" and same_recording_boot(state):
-        state = record_placement(config, identifier, state)
-        print("Save the Studio episode and stop native control. Keep the container still for the next phase.")
-        if input("Press Enter when Studio has saved and stopped, or q to resume later: ").strip():
+        if "staged_studio_recording" in state:
+            print(f"Studio episode {state['staged_studio_episode_id']} is already saved.")
+            if state.get("reason"):
+                print(state["reason"])
+            print("Use x from the menu to close the card as incomplete if the scene changed.")
+            prompt = "Press Enter to retry Explorer if the scene stayed fixed, or q to return: "
+        else:
+            state = record_placement(config, identifier, state)
+            print("Save the Studio episode and stop native control. Keep the container still for the next phase.")
+            prompt = "Press Enter when Studio has saved and stopped, or q to resume later: "
+        if input(prompt).strip():
             return None
         state = start_relocation(config, identifier)
     if state["status"] == "preparing":

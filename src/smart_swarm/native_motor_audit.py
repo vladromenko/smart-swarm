@@ -6,6 +6,7 @@ from pathlib import Path
 from .episode import atomic, load, sha
 from .studio import native_request, recorded_calibration
 
+KNOWN_DATA = "ds_8ba060b36e1440fe"
 HARDWARE_OUTCOMES = {"placement_succeeded", "placement_failed"}
 
 
@@ -76,9 +77,8 @@ def checkpoint_summary(summary, lineage, root):
 
 
 def run(config, output):
-    dataset = config["legacy_studio_dataset"]
-    data = native_episodes(config, dataset)
-    result = {"recording audit": data, "archived native checkpoint audit": checkpoints(config, dataset),
+    data = native_episodes(config, KNOWN_DATA)
+    result = {"recording audit": data, "archived native checkpoint audit": checkpoints(config, KNOWN_DATA),
               "purpose": "read-only inventory. Native structural quality and semantics are independently scored.",
               "operator labels": "A missing observed outcome remains unknown."}
     atomic(output, result)

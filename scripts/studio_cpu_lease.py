@@ -3,6 +3,7 @@
 import argparse
 from contextlib import ExitStack
 import json
+from os import EX_TEMPFAIL
 from pathlib import Path
 import sys
 
@@ -48,7 +49,8 @@ def main():
     try:
         hold(args.gpu_render, args.archive_only, cuda_compute=args.gpu_compute)
     except ResourceBusy as error:
-        raise SystemExit(str(error))
+        print(error, file=sys.stderr)
+        raise SystemExit(EX_TEMPFAIL) from None
 
 
 if __name__ == "__main__":

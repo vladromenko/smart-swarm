@@ -39,3 +39,6 @@ __pycache__/
 !/evidence/learning-pilot-v3/rosmaster-bounded-comparison.json
 !/evidence/learning-pilot-v3/rosmaster-matched-f6-views.pdf
 !/evidence/learning-pilot-v3/smolvla-initial-approach-comparison.pdf
+!/evidence/learning-pilot-v3/primary-scores-portable-v1.zip
+!/evidence/learning-pilot-v3/act-feedback-geometry.json
+!/evidence/learning-pilot-v3/witness-failure-mechanisms-public.json

@@ -2,12 +2,17 @@
 
 from contextlib import contextmanager
 import json
+from os import EX_TEMPFAIL
 from pathlib import Path
 import select
 import subprocess
 import time
 
 from .platform_client import production_client, reservation
+
+
+class NativeComputeBusy(RuntimeError):
+    """The native lease holder declined compute for a temporary resource condition."""
 
 
 @contextmanager
@@ -55,7 +60,10 @@ def read_native_grant(holder):
         raise TimeoutError("Native Studio reservation was not acknowledged")
     line = holder.stdout.readline()
     if not line:
-        raise RuntimeError(f"Native Studio reservation rejected: {holder.stderr.read().strip()}")
+        reason = f"Native Studio reservation rejected: {holder.stderr.read().strip()}"
+        if holder.wait(timeout=5) == EX_TEMPFAIL:
+            raise NativeComputeBusy(reason)
+        raise RuntimeError(reason)
     return json.loads(line)
 
 

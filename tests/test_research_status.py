@@ -71,3 +71,16 @@ def test_fresh_checkpoint_progress_requires_the_saved_validation_choice(tmp_path
                                            "receipt": str(receipt), "completed_resets": 1}]
     atomic(receipt, {**record, "checkpoint": "different"})
     assert motor_evaluation_progress(tmp_path, {})["selected_checkpoint"] is None
+
+
+def test_full_act_status_distinguishes_failed_fit_from_missing_comparison(tmp_path, monkeypatch):
+    from smart_swarm import research_status
+
+    monkeypatch.setattr(research_status, "EVIDENCE", tmp_path)
+    monkeypatch.setattr(research_status, "PILOT", tmp_path)
+    monkeypatch.setattr(research_status, "COMPACT", tmp_path)
+    assert research_status.motor()["full_comparison_status"]["act"] == "awaiting_receipt"
+    atomic(tmp_path / "act-clock-fit.json", {"fit_gate": False, "matching_starts": 5, "successful": 0})
+    assert research_status.motor()["full_comparison_status"]["act"] == "fit_gate_failed"
+    atomic(tmp_path / "act-full.json", {"status": "evaluated"})
+    assert research_status.motor()["full_comparison_status"]["act"] == "evaluated"

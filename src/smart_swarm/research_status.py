@@ -204,6 +204,9 @@ def motor():
     current = saved(PILOT / "act-clock-fit.json")
     fitting = current.get("fitting_cases", [])
     comparisons = {name: saved(PILOT / f"{name}-full.json") for name in ("act", "smolvla")}
+    comparison_status = {name: row.get("status", "awaiting_receipt") for name, row in comparisons.items()}
+    if comparison_status["act"] == "awaiting_receipt" and current.get("fit_gate") is False:
+        comparison_status["act"] = "fit_gate_failed"
     development_profile = COMPACT / "smolvla-development-profile.json"
     profile = saved(development_profile)
     native_path = PILOT / "native-policy-timing-and-stop-signal-rehearsal.json"
@@ -219,7 +222,7 @@ def motor():
             "device_timing_profiles": motor_device_profiles(),
             "native_execution_qualification": {"hardware_execution_qualified": native.get("hardware_execution_qualified"),
                                                "receipt": str(native_path) if native else None},
-            "full_comparison_status": {name: row.get("status", "awaiting_receipt") for name, row in comparisons.items()},
+            "full_comparison_status": comparison_status,
             "full_comparison_progress": {name: motor_run_progress(row) for name, row in comparisons.items()},
             "first_failure_stages": dict(Counter(row["first_failed_stage"] for row in fitting if row["first_failed_stage"]))}
 

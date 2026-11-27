@@ -13,6 +13,7 @@ import uuid
 
 import numpy as np
 
+from .act_trace import ACTInputTrace, TRACE_ISSUES
 from .arm_executor import ArmExecutor
 from .episode import atomic, load
 from .motor import ARM, IMAGE_SIZE, SENSORS, TASK, variation
@@ -121,7 +122,7 @@ def action_request(world, input_profile="historical-rgb", marker="cyan", *, issu
             "images": [b64encode(private[sensor].tobytes()).decode("ascii") for sensor in SENSORS]}
 
 
-def action(world, worker, executor=None):
+def action(world, worker, executor=None, *, exchange=None):
     from .motor_input import CLOCKED_PROFILE
 
     if worker.deadline is not None and time.monotonic() >= worker.deadline:
@@ -134,10 +135,24 @@ def action(world, worker, executor=None):
     if worker.smolvla_chunks:
         worker.pending_actions.extend(worker.request({**request, "type": "smolvla_chunk"})["actions"])
         return worker.pending_actions.popleft()
-    return worker.request(request)["action"]
+    if exchange is None:
+        return worker.request(request)["action"]
+    request["trace_act"] = True
+    response = worker.request(request)
+    exchange.update(request=request, response=response)
+    return response["action"]
 
 
-def run_trial(assets, worker, seed, bound, wall_seconds, profile):
+def issue_action(world, worker, executor, issue, trace=None):
+    if trace is None or issue >= TRACE_ISSUES:
+        return executor.submit(action(world, worker, executor))
+    exchange, observed_ns = {}, world.ns
+    control = executor.submit(action(world, worker, executor, exchange=exchange))
+    trace.save(issue, observed_ns, world.ns, exchange, control)
+    return control
+
+
+def run_trial(assets, worker, seed, bound, wall_seconds, profile, *, trace=None):
     from .motor_diagnostics import contact_valid_placement, observe, summarize
     from .motor_input import CLOCKED_PROFILE, PROFILE
 
@@ -153,7 +168,7 @@ def run_trial(assets, worker, seed, bound, wall_seconds, profile):
         executor = ArmExecutor(world, profile)
         executor.prime()
         for idx in range(bound):
-            executor.submit(action(world, worker, executor))
+            issue_action(world, worker, executor, idx, trace)
             if idx % 15 == 14:
                 label = observe(world, idx + 1)
                 success = label["released"] and label["inside_carrier"] and label["stationary"]
@@ -169,7 +184,8 @@ def run_trial(assets, worker, seed, bound, wall_seconds, profile):
                 "contact_valid_placement": contact_valid_placement(summary),
                 "first_failed_stage": summary["first_failed_stage"],
                 "maximum_sampled_lift_m": max(row["cube_height_above_table_m"] for row in feedback),
-                "final_truth": truth(world), "sampled_evaluator_truth": feedback}
+                "final_truth": truth(world), "sampled_evaluator_truth": feedback,
+                **({"act_input_trace": trace.report()} if trace is not None else {})}
     finally:
         world.close()
 
@@ -185,8 +201,25 @@ def evaluation_record(checkpoint, dataset, profile, seed_start, role, count, res
             "requested_resets": count, "results": [], "status": "evaluating", "reservation": reservation, **visual}
 
 
+def requested_trace(enabled, root, checkpoint, count, role, profile, smolvla_chunks):
+    if not enabled:
+        return None
+    config = load(checkpoint / "config.json")
+    if (count != 1 or role != "development" or profile != "aligned-sample-v2" or smolvla_chunks
+            or config["type"] != "act" or config.get("temporal_ensemble_coeff") is not None):
+        raise ValueError("ACT input tracing requires one aligned development trial using the native ACT queue")
+    return ACTInputTrace(root / "act-input-trace")
+
+
+def finish_evaluation(root, record, trace):
+    record["successful_resets"] = sum(row["contact_valid_placement"] for row in record["results"])
+    if trace is not None:
+        record["act_input_trace"] = trace.report()
+    atomic(root / "evaluation.json", record)
+
+
 def evaluate(assets, checkpoint, dataset, base, count, steps, wall_seconds, profile="aligned-sample-v2", seed_start=31_000,
-             *, role="development", heartbeat=None, reservation=None, smolvla_chunks=False, device="cpu"):
+             *, role="development", heartbeat=None, reservation=None, smolvla_chunks=False, device="cpu", trace_act=False):
     if not 1 <= count <= 20 or not 30 <= steps <= 600 or not 30 <= wall_seconds <= 7200:
         raise ValueError("Invalid bounded evaluation profile")
     root = base / f"motor-pilot-{uuid.uuid4().hex[:12]}"
@@ -197,8 +230,9 @@ def evaluate(assets, checkpoint, dataset, base, count, steps, wall_seconds, prof
     if smolvla_chunks:
         record["action_transport"] = "verified-smolvla-chunk"
     atomic(root / "evaluation.json", record)
-    worker = None
+    worker = trace = None
     try:
+        trace = requested_trace(trace_act, root, checkpoint, count, role, profile, smolvla_chunks)
         worker = Worker(checkpoint, dataset / "validation", root / "policy-worker.log", deadline=started + wall_seconds,
                         full_validation=role == "fresh-test", smolvla_chunks=smolvla_chunks, device=device,
                         reservation=reservation)
@@ -210,7 +244,7 @@ def evaluate(assets, checkpoint, dataset, base, count, steps, wall_seconds, prof
             remaining = wall_seconds - (time.monotonic() - started)
             if remaining <= 1:
                 raise TimeoutError("Closed-loop evaluation wall-time cap reached")
-            record["results"].append(run_trial(assets, worker, seed_start + idx, steps, remaining, profile))
+            record["results"].append(run_trial(assets, worker, seed_start + idx, steps, remaining, profile, trace=trace))
             atomic(root / "evaluation.json", record)
         record["status"] = "evaluated"
     except (Exception, KeyboardInterrupt) as error:
@@ -221,8 +255,7 @@ def evaluate(assets, checkpoint, dataset, base, count, steps, wall_seconds, prof
             if worker is not None:
                 worker.close()
         finally:
-            record["successful_resets"] = sum(row["contact_valid_placement"] for row in record["results"])
-            atomic(root / "evaluation.json", record)
+            finish_evaluation(root, record, trace)
     return {"evaluation_path": str(root / "evaluation.json"), **record}
 
 

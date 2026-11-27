@@ -206,6 +206,8 @@ def add_motor_commands(sub):
     evaluation.add_argument("--seed-start", type=int, default=31_000)
     evaluation.add_argument("--gpu-render", action="store_true", help="Request the native graphics lease for MuJoCo only")
     evaluation.add_argument("--device", choices=("cpu", "cuda"), default="cpu", help="Select the policy compute device")
+    evaluation.add_argument("--trace-act", action="store_true",
+                            help="Save exact inputs for the first 204 actions of one ACT development trial")
 
 def dispatch(config, args):
     if args.command == "doctor":
@@ -395,6 +397,8 @@ def motor_command(config, args):
             configure_renderer(config, grant=grant)
             from .evaluate_motor import evaluate
 
+            if args.trace_act:
+                options["trace_act"] = True
             return evaluate(config["asset_root"], args.checkpoint.resolve(),
                             (args.dataset or root / "lerobot").resolve(), root / "evaluation-runs",
                             args.episodes, args.steps, args.wall_seconds, args.executor_profile, args.seed_start,

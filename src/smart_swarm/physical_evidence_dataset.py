@@ -20,7 +20,7 @@ from .physical_story_annotations import apply_reviews
 from .physical_story_condition import PHASE_DIGEST, audit_condition
 from .physical_story_plan import prepare
 from .physical_story_replay import AGENTS, OUTCOMES
-from .physical_story_source import mobile_phase_bounds
+from .physical_story_source import SETTLED_TANK_FRAMES, mobile_phase_bounds, settled_tank_start
 from .primary_inputs import primary_policy_view
 
 SCHEMA = "smart-swarm-physical-evidence-corpus-v1"
@@ -70,12 +70,14 @@ def verify_role_scopes(root, manifest):
 def verify_fleet_windows(trial, root, journal):
     audit = load(trial / "fleet-timing-audit.json")
     tank, receiver = mobile_phase_bounds(journal, journal["query_ns"])
+    settled = settled_tank_start(journal)
     scopes = ((AGENTS[1], *tank, 8), (AGENTS[2], *receiver, 1))
     for agent, early, late, required in scopes:
         proof = audit[agent]
         if (proof["permitted_interval_ns"] != [early, late] or proof["selected"] != required
                 or not proof["clock_status_samples"] or proof["eligible"] < required):
             raise ValueError("The sealed mobile capture differs from its clock admission record")
+        settled_exposures, earlier_count = set(), 0
         for packet in rows(root / POLICY / f"{agent}.jsonl"):
             camera, = packet["cameras"]
             bounds = camera["capture_interval"]
@@ -83,6 +85,15 @@ def verify_fleet_windows(trial, root, journal):
             received = int(packet["receive_time"]["monotonic_ns"])
             if not early <= begin <= end <= received <= late or camera["exposure_time"] is not None:
                 raise ValueError("A mobile exposure or receipt falls outside its private phase")
+            if settled is not None:
+                if begin >= settled:
+                    settled_exposures.add(begin)
+                earlier_count += int(received <= settled)
+        if agent == AGENTS[1] and settled is not None and (
+                proof.get("settled_after_ns") != settled or proof.get("settled_selected") != SETTLED_TANK_FRAMES
+                or len(settled_exposures) != SETTLED_TANK_FRAMES or earlier_count != required - SETTLED_TANK_FRAMES
+                or proof.get("settled_eligible", 0) < len(settled_exposures)):
+            raise ValueError("The sealed Tank clip lacks its verified observations before and after relocation confirmation")
 
 
 def verify_decision(root, journal):

@@ -96,6 +96,16 @@ def step(request, model, pre, post):
     return output
 
 
+def action_reply(request, model, pre, post):
+    if not request.get("trace_act"):
+        return {"action": step(request, model, pre, post)}
+    if model.config.type != "act" or model.config.temporal_ensemble_coeff is not None:
+        raise ValueError("The input trace requires ACT with a native action queue")
+    before = len(model._action_queue)
+    action = step(request, model, pre, post)
+    return {"action": action, "act_queue": {"before": before, "after": len(model._action_queue)}}
+
+
 def smolvla_chunk(batch, model, pre, post):
     if (model.config.type != "smolvla" or set(model._queues) != {ACTION} or model._queues[ACTION]
             or model.config.rtc_config is not None and model.config.rtc_config.enabled):
@@ -233,7 +243,7 @@ def serve(descriptor, checkpoint, validation, all_sources=False, *, device="cpu"
             elif timing_startup and command["type"] in ("action", "smolvla_chunk"):
                 print(json.dumps(timed_action(command, model, pre, post), allow_nan=False), file=outbound)
             elif command["type"] == "action":
-                print(json.dumps({"action": step(command, model, pre, post)}, allow_nan=False), file=outbound)
+                print(json.dumps(action_reply(command, model, pre, post), allow_nan=False), file=outbound)
             elif command["type"] == "smolvla_chunk":
                 result = smolvla_chunk(example_batch(command), model, pre, post)
                 print(json.dumps({"actions": result}, allow_nan=False), file=outbound)

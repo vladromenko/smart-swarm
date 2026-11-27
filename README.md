@@ -25,7 +25,7 @@ Copy `configs/homebrain.example.toml` to `configs/homebrain.toml` and set your o
 ./Smart_Swarm.command
 ```
 
-The operator guide covers the four-attempt SO101 component pilot and the distinct 24-story three-agent collection. The experiment descriptor template can be filled in with local paths for a Robot Lab menu.
+Use **d** in the standalone launcher for live recording readiness, **w** for the three-robot story block, and **t** for saved training and evaluation results. The operator guide covers the four-attempt SO101 component pilot and the 24-story three-agent collection. The experiment descriptor template can be filled in with local paths for a Robot Lab menu.
 
 ## Research and results
 
@@ -34,6 +34,7 @@ The independent simulation uses 100 source worlds and reports seven methods at t
 - [Paper draft PDF](docs/PAPER_DRAFT.pdf) · [Markdown](docs/PAPER_DRAFT.md)
 - [Independent simulation results](docs/PRIMARY_RESULTS_INDEPENDENT.md)
 - [Machine-readable simulation table](evidence/learning-pilot-v3/primary-method-table-test.json)
+- [Portable primary score archive](evidence/learning-pilot-v3/primary-scores-portable-v1.zip)
 - [Matched communication controls](docs/PRIMARY_MATCHED_COMPACT_RESULTS.md)
 - [Research protocol](docs/RESEARCH_PROTOCOL.md)
 - [Claims and limitations](docs/CLAIMS_AND_LIMITATIONS.md)

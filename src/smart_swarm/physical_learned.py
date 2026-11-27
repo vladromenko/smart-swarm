@@ -24,6 +24,11 @@ METHOD = "selective_with_observed_marker_support"
 HEADS = ("events_only", "events_plus_reveal")
 TIMEOUT_S = 30
 DEFERRED = "deferred_blind_offline"
+ONLINE_FAILURE_FIELDS = {"compute_admission": "online_admission_failure", "worker_timeout": "online_worker_timeout"}
+
+
+class OfflineWorkerTimeout(RuntimeError):
+    """The admitted blind inference worker reached its existing time limit."""
 
 
 def packets(root, manifest):
@@ -125,28 +130,42 @@ def run_worker(scoped, digest):
 
 def inference(config, recorder, query):
     manifest = {**recorder.meta, "sample_counts": recorder.counts, "query_boundary": time_at(query, recorder.clock)}
-    admitted_online = False
+    phase = "compute_admission"
     try:
         with admitted(config, "smart-swarm-physical-evidence-inference") as (grant, heartbeat):
-            admitted_online = True
+            phase = "private_window"
             with scoped_window(recorder.root, manifest) as (scoped, digest):
+                phase = "worker"
                 result = run_worker(scoped, digest)
+                phase = "completion"
             heartbeat()
         admission = {key: grant[key] for key in ("job_id", "device", "scope") if key in grant}
         return {"status": "scored", "receipt": result, "admission": admission}
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired, ProtocolError) as error:
         failure = {"status": "unavailable", "reason": str(error) or type(error).__name__}
-        if admitted_online:
-            return failure
-        return defer_online_admission(recorder.root, manifest, failure)
+        if phase == "compute_admission":
+            return defer_online(recorder.root, manifest, failure, phase)
+        if phase == "worker" and isinstance(error, subprocess.TimeoutExpired):
+            failure["reason"] = f"The online learned worker reached its {error.timeout:g}-second limit"
+            return defer_online(recorder.root, manifest, failure, "worker_timeout")
+        return failure
 
 
-def defer_online_admission(root, manifest, failure):
+def defer_online(root, manifest, failure, stage):
     try:
         seal = offline_seal(root, manifest)
     except (OSError, ValueError, KeyError, TypeError, ProtocolError) as error:
         return {**failure, "reason": f"{failure['reason']}. Blind offline input seal failed. {error}"}
-    return {**seal, "online_attempt": {**failure, "stage": "compute_admission"}}
+    return {**seal, "online_attempt": {**failure, "stage": stage}}
+
+
+def online_failure_fields(learned):
+    failure = learned.get("online_attempt")
+    if not isinstance(failure, dict) or not isinstance(failure.get("reason"), str):
+        return {}
+    stage = failure.get("stage")
+    field = ONLINE_FAILURE_FIELDS.get(stage) if isinstance(stage, str) else None
+    return {field: failure["reason"]} if field else {}
 
 
 def offline_seal(root, manifest):
@@ -161,7 +180,8 @@ def verify_offline_seal(root, manifest, seal):
     if "online_attempt" in seal:
         attempt = seal["online_attempt"]
         if (not isinstance(attempt, dict) or set(attempt) != {"status", "reason", "stage"}
-                or attempt["status"] != "unavailable" or attempt["stage"] != "compute_admission"
+                or attempt["status"] != "unavailable" or not isinstance(attempt["stage"], str)
+                or attempt["stage"] not in ONLINE_FAILURE_FIELDS
                 or not isinstance(attempt["reason"], str) or not attempt["reason"].strip()):
             raise ValueError("The offline seal has an invalid online admission record")
         expected["online_attempt"] = attempt
@@ -175,7 +195,10 @@ def blind_inference(config, root, manifest, seal):
         with scoped_window(root, manifest) as (scoped, digest):
             if digest != seal["permitted_input_sha256"]:
                 raise ValueError("The isolated reader received a different private window")
-            result = run_worker(scoped, digest)
+            try:
+                result = run_worker(scoped, digest)
+            except subprocess.TimeoutExpired as error:
+                raise OfflineWorkerTimeout(f"The blind offline worker reached its {error.timeout:g}-second limit") from error
         heartbeat()
     return {"status": "scored", "mode": "blind_offline", "receipt": result,
             "admission": {key: grant[key] for key in ("job_id", "device", "scope")}}

@@ -17,6 +17,7 @@ from smart_swarm.physical_story_source import fleet_manifest, story_workspace
 from smart_swarm.studio import validate_story_episode
 
 PILOT = Path(__file__).resolve().parents[1] / "evidence/learning-pilot-v3"
+NATIVE_FIXTURE = "data/ds_272443932a3f4f4c/episodes/ep_20261106T235855_3254943add"
 
 
 def ended_window(config):
@@ -73,7 +74,7 @@ def withheld_fixture(config):
 
 
 def validated_native_fixture(config):
-    episode = config["studio_project"] / config["studio_recovery_fixture"]
+    episode = config["studio_project"] / NATIVE_FIXTURE
     native = rows(episode / "frames.jsonl")
     start = perf_counter()
     proof = validate_story_episode(config, episode, technical=True)

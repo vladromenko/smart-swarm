@@ -10,7 +10,7 @@ from .evidence_comparison import ERROR_COST, INSPECTION_COST, decision_cost, gro
 from .particle_memory import LOCATIONS
 from .physical_evidence_dataset import DECISION_FILE, publish
 from .physical_inspection_controls import control_case, inspection_controls
-from .physical_learned import HEADS, METHOD, PROFILE
+from .physical_learned import HEADS, METHOD, PROFILE, online_failure_fields
 from .physical_witness_score import diagnose, summarize as summarize_witnesses
 
 RULE = "rgb_rule"
@@ -66,14 +66,12 @@ def scoring_case(record, decision):
         forecasts.update({kind: checked_forecast(receipt["heads"][kind], receipt["heads"][kind]["threshold"])
                           for kind in HEADS})
     reason = record.get("blind_offline_forecast_error") or learned.get("reason")
-    online_failure = (decision.get("learned_evidence") or {}).get("online_attempt")
+    online_failure = online_failure_fields(decision.get("learned_evidence") or {})
     score = {**{key: record[key] for key in ("story_id", "scene_group_id", "family", "split")},
             "terminal": terminal, "learned_forecast_status": learned["status"],
             "learned_forecast_mode": learned.get("mode", "online") if learned["status"] == "scored" else None,
             "condition_status": record.get("condition_audit", {}).get("status", "unverified"),
-            "learned_forecast_reason": reason, "forecasts": forecasts}
-    if online_failure is not None:
-        score["online_admission_failure"] = online_failure["reason"]
+            "learned_forecast_reason": reason, "forecasts": forecasts, **online_failure}
     candidate = control_case(record, score)
     return {**score, "inspection_control_case": candidate} if candidate is not None else score
 

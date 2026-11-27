@@ -734,13 +734,22 @@ def test_distributed_start_refuses_unconfirmed_native_stop_before_recorder_check
         story.story_preflight({})
 
 
+def healthy_distributed_readback(monkeypatch, story):
+    _, studio = attended_studio_snapshots()
+    team = {"so101_studio": studio, "active_native_capture": None,
+            "story_observation_readiness": {"ready": True, "issues": []}}
+    monkeypatch.setattr(story, "native_team_status", lambda *_args, **_kw: team)
+    monkeypatch.setattr(story, "fleet_capacity", lambda _: {"free_bytes": 2 << 30,
+                        "native_minimum_free_bytes": 1 << 30})
+
+
 def test_story_preflight_separates_busy_native_reservation_from_helper_failure(monkeypatch):
     from subprocess import CompletedProcess, TimeoutExpired
 
     from smart_swarm import physical_story_source as story, studio
     from smart_swarm.contract import ProtocolError
 
-    monkeypatch.setattr(story, "story_readiness", lambda _: {"blocking_issues": []})
+    healthy_distributed_readback(monkeypatch, story)
     monkeypatch.setattr(studio, "studio_env", lambda _: {})
     config = {"studio_python": "native-python"}
     for result, code in ((75, "RESOURCE_BUSY"), (1, "OFFLINE")):
@@ -748,6 +757,7 @@ def test_story_preflight_separates_busy_native_reservation_from_helper_failure(m
         with pytest.raises(ProtocolError) as error:
             story.story_preflight(config)
         assert error.value.code == code
+        assert not story.story_readiness(config)["recording_reservation_available"]
 
     def timeout(*args, **kwargs):
         raise TimeoutExpired(args[0], kwargs["timeout"])
@@ -755,6 +765,25 @@ def test_story_preflight_separates_busy_native_reservation_from_helper_failure(m
     monkeypatch.setattr(story.subprocess, "run", timeout)
     with pytest.raises(ProtocolError, match="reservation did not answer"):
         story.story_preflight(config)
+
+
+def test_story_start_requires_the_current_attended_receipt(monkeypatch):
+    from smart_swarm import physical_story_source as story
+    from smart_swarm.contract import ProtocolError
+
+    healthy_distributed_readback(monkeypatch, story)
+    monkeypatch.setattr(story, "require_recording_lease", lambda _: None)
+    pending = story.story_readiness({})
+    assert pending["status"] == "SOFTWARE_READY_AWAITING_ATTENDED_CHECK" and pending["recording_reservation_available"]
+    with pytest.raises(ProtocolError, match="attended SO101 setup"):
+        story.story_preflight({})
+    story.story_preflight({}, require_attended=False)
+    monkeypatch.setattr(story, "attended_status", lambda *_: {"current": True, "receipt": "technical"})
+    ready = story.story_readiness({})
+    assert ready["status"] == "READY_FOR_STORY_COLLECTION"
+    assert ready["recording_reservation_available"] and ready["blocking_issues"] == []
+    assert ready["pending_attended_checks"] == ["Distributed scene and witness framing"]
+    story.story_preflight({})
 
 
 def test_story_readiness_applies_the_existing_native_storage_floor(monkeypatch, tmp_path):
@@ -767,9 +796,11 @@ def test_story_readiness_applies_the_existing_native_storage_floor(monkeypatch, 
     monkeypatch.setattr(story, "native_team_status", lambda *_args, **_kwargs: team)
     space = {"free_bytes": 1024**3 - 1, "native_minimum_free_bytes": 1024**3}
     monkeypatch.setattr(story, "fleet_capacity", lambda _: dict(space))
+    monkeypatch.setattr(story, "require_recording_lease", lambda _: None)
     config = {"data_root": tmp_path}
     blocked = story.story_readiness(config)
     assert [row["code"] for row in blocked["blocking_issues"]] == ["STORAGE_LIMIT"]
+    assert blocked["recording_reservation_available"] is None
     assert not blocked["motion_requested"] and not blocked["recording_started"]
     space["free_bytes"] += 1
     assert story.story_readiness(config)["ready_for_native_lease_check"]

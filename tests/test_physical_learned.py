@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from subprocess import TimeoutExpired
 
 import numpy as np
 import pytest
@@ -7,7 +8,9 @@ from smart_swarm import physical_learned, physical_offline, physical_story_repla
 from smart_swarm.contract import ProtocolError, time_at
 from smart_swarm.episode import LABELS, POLICY, TRUTH, Recorder, atomic, load, rows
 from smart_swarm.evidence_inputs import AGENTS
+from smart_swarm.physical_story_source import learned_story_progress
 from smart_swarm.primary_inputs import json_lines
+from smart_swarm.research_jobs import NativeComputeBusy
 
 
 def create_recording(tmp_path, *, measured=False):
@@ -127,6 +130,52 @@ def test_admitted_worker_failure_keeps_the_unavailable_online_result(tmp_path, m
     assert result == {"status": "unavailable", "reason": "The original checkpoint digest differs"}
 
 
+def test_online_worker_timeout_seals_the_private_window(tmp_path, monkeypatch):
+    from smart_swarm.physical_story_source import learned_story_progress
+
+    recorder, manifest, arm, tank = create_recording(tmp_path)
+
+    @contextmanager
+    def available(*_):
+        yield {}, lambda: None
+
+    def timed_out(scoped, digest):
+        assert not (scoped / TRUTH).exists()
+        assert digest == physical_learned.offline_seal(recorder.root, manifest)["permitted_input_sha256"]
+        raise TimeoutExpired(["physical-evidence-worker"], physical_learned.TIMEOUT_S)
+
+    monkeypatch.setattr(physical_learned, "admitted", available)
+    monkeypatch.setattr(physical_learned, "run_worker", timed_out)
+    monkeypatch.setattr(physical_story_replay, "anchor", lambda: {"monotonic_ns": 20})
+    decision = physical_story_replay.persist_decision({}, recorder, arm, tank, 16)
+    seal = decision["learned_evidence"]
+    assert seal["status"] == physical_learned.DEFERRED
+    assert seal["online_attempt"]["stage"] == "worker_timeout"
+    assert "30-second limit" in seal["online_attempt"]["reason"]
+    assert physical_learned.verify_optional(recorder.root, manifest, decision) == seal
+    assert list((recorder.root / TRUTH).iterdir()) == []
+    progress = learned_story_progress(recorder.root, {"status": "pending_reveal", "decision": decision})
+    assert progress["online_worker_timeout"] == seal["online_attempt"]["reason"]
+    assert "online_admission_failure" not in progress
+
+
+def test_offline_publishing_keeps_the_first_verified_forecast(tmp_path, monkeypatch):
+    path = tmp_path / physical_offline.FILE
+    identity = {"decision_sha256": "sealed", "permitted_input_sha256": "private"}
+    original = {"input_seal": identity, "mode": "blind_offline", "status": "scored", "receipt": {"first": True}}
+    atomic(path, original)
+    original_bytes = path.read_bytes()
+    monkeypatch.setattr(physical_offline, "input_seal", lambda _: ({}, {}, identity))
+    monkeypatch.setattr(physical_offline, "verify_optional", lambda *_: None)
+    result = physical_offline.publish_replay(tmp_path, path, {**original, "receipt": {"first": False}}, identity)
+    assert result == original and path.read_bytes() == original_bytes
+    changed = {**identity, "decision_sha256": "changed"}
+    monkeypatch.setattr(physical_offline, "input_seal", lambda _: ({}, {}, changed))
+    with pytest.raises(ValueError, match="seal changed"):
+        physical_offline.publish_replay(tmp_path, path, original, identity)
+    assert path.read_bytes() == original_bytes
+
+
 def test_offline_seal_rejects_changed_rgb_and_ignores_evaluator_truth(tmp_path, monkeypatch):
     recorder, manifest, arm, tank = create_recording(tmp_path)
     monkeypatch.setattr(physical_story_replay, "anchor", lambda: {"monotonic_ns": 20})
@@ -143,16 +192,83 @@ def test_offline_seal_rejects_changed_rgb_and_ignores_evaluator_truth(tmp_path, 
 
 def test_automatic_offline_forecast_waits_for_completed_story(tmp_path, monkeypatch):
     config = {"data_root": tmp_path}
-    trial = tmp_path / "physical-stories" / "card"
-    trial.mkdir(parents=True)
-    state = {"status": "pending_reveal", "decision": {"learned_evidence": {"status": physical_learned.DEFERRED}}}
-    journal = trial / "trial.json"
-    atomic(journal, state)
+    trial = queued_trial(tmp_path, "card", status="pending_reveal")
     calls = []
-    monkeypatch.setattr(physical_offline, "score_trial", lambda _, target: calls.append(target))
-    attempted = {}
-    assert physical_offline.observe_pending(config, attempted) is None and not calls
-    state["status"] = "complete"
-    atomic(journal, state)
-    assert physical_offline.observe_pending(config, attempted) == "card" and calls == [trial]
-    assert physical_offline.observe_pending(config, attempted) is None and calls == [trial]
+
+    def score(_, target):
+        calls.append(target)
+        atomic(target / physical_offline.FILE, {})
+
+    monkeypatch.setattr(physical_offline, "score_trial", score)
+    assert physical_offline.observe_pending(config) is None and not calls
+    queued_trial(tmp_path, "card")
+    assert physical_offline.observe_pending(config) == "card" and calls == [trial]
+    assert physical_offline.observe_pending(config) is None and calls == [trial]
+
+
+def queued_trial(root, card, *, status="complete"):
+    trial = root / "physical-stories" / card
+    trial.mkdir(parents=True, exist_ok=True)
+    seal = {"status": physical_learned.DEFERRED, "permitted_input_sha256": card, "profiles_sha256": "frozen"}
+    atomic(trial / "trial.json", {"status": status, "decision": {"learned_evidence": seal}})
+    return trial
+
+
+def test_offline_queue_restarts_keep_backoff_and_let_later_cards_finish(tmp_path, monkeypatch):
+    config = {"data_root": tmp_path}
+    delayed = queued_trial(tmp_path, "a")
+    following = queued_trial(tmp_path, "b")
+    calls = []
+    now = [1000]
+
+    def score(_, trial):
+        calls.append(trial)
+        if trial == delayed:
+            raise physical_learned.OfflineWorkerTimeout("worker reached its 30-second limit")
+        atomic(trial / physical_offline.FILE, {"forecast": "saved"})
+
+    monkeypatch.setattr(physical_offline, "score_trial", score)
+    monkeypatch.setattr(physical_offline.time, "time", lambda: now[0])
+    assert physical_offline.observe_pending(config) is None
+    assert physical_offline.observe_pending(config) == "b"
+    saved = (following / physical_offline.FILE).read_bytes()
+    assert calls == [delayed, following]
+    for advance in (60, 60, 3600):
+        now[0] += advance
+        assert physical_offline.observe_pending(config) is None
+    assert calls == [delayed, following, delayed, delayed]
+    progress = learned_story_progress(delayed, load(delayed / "trial.json"))
+    assert progress["blind_offline_queue"] == "retry_exhausted"
+    assert progress["blind_offline_worker_timeouts"] == 3
+    assert progress["learned_forecast_reason"] == "worker reached its 30-second limit"
+    assert (following / physical_offline.FILE).read_bytes() == saved
+
+
+def test_offline_queue_does_not_spend_worker_timeouts_on_busy_compute(tmp_path, monkeypatch):
+    config = {"data_root": tmp_path}
+    trial = queued_trial(tmp_path, "a")
+    now = [1000]
+
+    def busy(*_):
+        raise NativeComputeBusy("The CPU lease is held")
+
+    monkeypatch.setattr(physical_offline.time, "time", lambda: now[0])
+    monkeypatch.setattr(physical_offline, "score_trial", busy)
+    for _ in range(5):
+        assert physical_offline.observe_pending(config) is None
+        now[0] += 60
+    progress = learned_story_progress(trial, load(trial / "trial.json"))
+    assert progress["blind_offline_queue"] == "waiting_for_compute"
+    assert progress["blind_offline_worker_timeouts"] == 0
+
+    def invalid(*_):
+        raise ValueError("The archived prediction record changed after sealing")
+
+    monkeypatch.setattr(physical_offline, "score_trial", invalid)
+    assert physical_offline.observe_pending(config) is None
+    progress = learned_story_progress(trial, load(trial / "trial.json"))
+    assert progress["blind_offline_queue"] == "failed"
+    assert "changed after sealing" in progress["learned_forecast_reason"]
+    monkeypatch.setattr(physical_offline, "score_trial", lambda *_: pytest.fail("Invalid seal was retried"))
+    now[0] += 60
+    assert physical_offline.observe_pending(config) is None

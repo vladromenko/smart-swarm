@@ -25,6 +25,7 @@ ATTEMPTS = (
 
 CHOICES = """
   d  Refresh live recording readiness
+  t  View recorded research results and training progress
   v  Save both camera-only previews for framing review
   p  Record the attended SO101 setup, control and STOP check
   w  View the current distributed visual story block
@@ -85,8 +86,8 @@ def select(config, choice):
 
         result = record_attended(config)
         print(result.get("receipt") or result["reason"])
-    if choice == "s":
-        show(config)
+    if choice in ("s", "t"):
+        {"s": show, "t": show_research_status}[choice](config)
     if choice == "w":
         from .physical_story_operator import show as show_stories
 
@@ -111,6 +112,50 @@ def select(config, choice):
     if choice == "q":
         report_archive_storage(config)
         review_saved_motor(config)
+
+
+def show_research_status(config):
+    from .research_status import project_summary
+
+    report = project_summary(config, {})
+    valid = report["data_validity"]
+    print("\nResearch status from saved receipts")
+    if valid["aligned_teacher_attempts"]:
+        print(f"Matched teacher replays {valid['aligned_teacher_successes']}/{valid['aligned_teacher_attempts']} placements")
+    show_motor_results(report["motor_competence"])
+    learned = report["learned_evidence"]
+    primary = learned["primary"]
+    print(f"Visual memory pilot {learned['pilot']}. Primary test has "
+          f"{primary['accepted_independent_sources']}/{primary['planned_independent_sources']} independent sources.")
+    for kind, row in learned.get("models", {}).items():
+        print(f"  {kind.replace('_', ' ')} had {row['optimizer_updates']} updates and "
+              f"{row['f6_inspections']}/{row['f6_variants']} F6 inspections in the separate pilot.")
+    physical = report["physical_verification"]
+    pilot = physical["so101_pilot_counts"] or {}
+    print(f"Physical attempts saved. SO101 {pilot.get('attempts', 0)}, "
+          f"distributed {physical['distributed_attempts']}/{physical['distributed_cards_planned'] or '?'}")
+    print("Use d for live recording readiness or ./smart-swarm status for the full research receipts.")
+
+
+def show_motor_results(motor):
+    for name, row in motor["historical_development_evaluations"].items():
+        print(f"Historical {name.upper()} {row['successful_resets']}/{row['requested_resets']} placements")
+    if motor["matched_act_attempts"]:
+        stages = ", ".join(f"{count} at {stage}" for stage, count in motor["first_failure_stages"].items())
+        print(f"Matched clock-conditioned ACT {motor['matched_act_successes']}/{motor['matched_act_attempts']} placements"
+              + (f". First failures {stages}." if stages else "."))
+    if motor["full_comparison_status"]["act"] == "fit_gate_failed":
+        print("Full ACT comparison is blocked by the fitting gate.")
+    smol = motor["full_comparison_progress"]["smolvla"]
+    if smol.get("job_directory"):
+        activity = "running" if smol["optimizer_pid"] is not None else motor["full_comparison_status"]["smolvla"]
+        print(f"Compact SmolVLA {activity} after {smol['optimizer_updates']} updates.")
+        selected = next((row for row in smol["completed_validation_candidates"]
+                         if row["checkpoint"] == smol["selected_checkpoint"]), None)
+        if selected:
+            print(f"  Validation {selected['successful_resets']}/{selected['resets']} placements")
+        if smol["fresh_resets"]:
+            print(f"  Fresh simulation {smol['fresh_successes']}/{smol['fresh_resets']} placements")
 
 
 def review_saved_motor(config):
@@ -198,6 +243,9 @@ def show_readiness(config, *, probe_mobile=False):
         show_mobile_transport(report["mobile_native_transport"])
     check = report["attended_so101_check"]
     print(f"Current attended SO101 check {check['receipt']}" if check["current"] else check["reason"])
+    available = report["recording_reservation_available"]
+    reservation = {True: "available", False: "unavailable", None: "waiting for device checks"}[available]
+    print(f"Distributed recording reservation {reservation}.")
     for pending in report["pending_attended_checks"]:
         print(f"Pending attended check. {pending}.")
 
@@ -432,7 +480,6 @@ def watch_intake(config, stopping):
     from .physical_story_review import announce, publish_ready
 
     error_path = config["data_root"] / "so101-pilot/last-watch-error.json"
-    reviewed = {}
     motor_retry = {}
     reopen_reports = True
     while not stopping.wait(5):
@@ -441,7 +488,7 @@ def watch_intake(config, stopping):
         except (ProtocolError, OSError, ValueError, URLError) as error:
             atomic(error_path, {"reason": str(error)})
         try:
-            story = observe_pending(config, reviewed)
+            story = observe_pending(config)
             reopen_reports = reopen_reports or story is not None
             stories = publish(config) if story else None
             if reopen_reports:

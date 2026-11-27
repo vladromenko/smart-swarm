@@ -93,7 +93,7 @@ def denied_online_seal(config, recorder, query):
 def score_queued_fixture(config, trial, state, prediction):
     journal = {**state, "status": "complete", "decision": prediction, "evaluation_mode": "online"}
     atomic(trial / "trial.json", journal)
-    if observe_pending(config, {}) != trial.name:
+    if observe_pending(config) != trial.name:
         raise ValueError("The background queue did not find the native fallback input")
     status = learned_story_progress(trial, journal)
     if status["learned_evidence_status"] != "scored" or status["learned_forecast_mode"] != "blind_offline":

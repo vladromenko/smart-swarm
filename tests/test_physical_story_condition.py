@@ -42,7 +42,8 @@ def test_phase_marker_preserves_deviation_and_binds_checks(tmp_path, monkeypatch
     initial = {"monotonic_ns": 10, "observed_placement_outcome": "placement_succeeded",
                "assistance": "attended_native_motion"}
     atomic(trial / "trial.json", {"status": "recording", "card": card, "markers": {"placement_closed": initial}})
-    monkeypatch.setattr("builtins.input", lambda *_: "hd")
+    responses = iter(("typo", "hd"))
+    monkeypatch.setattr("builtins.input", lambda *_: next(responses))
     actor, check = observe_motion("relocation", "human_relocation", "the inner carrier nest inside the tray")
     result = mark(config, card["story_id"], "relocation_closed", assistance=actor, observed_change=check)
     markers = result["markers"]

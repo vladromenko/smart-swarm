@@ -7,6 +7,7 @@ from .episode import atomic, load
 from .physical_evidence_dataset import describe, publish as evidence_corpus
 from .physical_evidence_score import INSPECT, METHODS, RULE, native_scoring_case
 from .physical_inspection_controls import inspection_controls
+from .physical_learned import ONLINE_FAILURE_FIELDS
 from .physical_motor_dataset import publish as motor_corpus
 from .physical_paper import publish_report
 from .physical_story_plan import prepare
@@ -66,7 +67,7 @@ def review_card(card, index):
     score = native_scoring_case(record)
     witness = {"witness_diagnostics": score["witness_diagnostics"]} if "witness_diagnostics" in score else {}
     controls = {"inspection_control_case": score["inspection_control_case"]} if "inspection_control_case" in score else {}
-    online = {"online_admission_failure": score["online_admission_failure"]} if "online_admission_failure" in score else {}
+    online = {field: score[field] for field in ONLINE_FAILURE_FIELDS.values() if field in score}
     return {**result, "capture_status": "complete", "condition": record["condition_audit"],
             "cameras": camera_coverage(record), "labels": record["labels"],
             "observed_placement": record["attended_placement_outcomes"], "assistance": record["assistance_by_phase"],

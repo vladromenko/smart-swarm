@@ -8,7 +8,7 @@ import numpy as np
 
 from .arm_executor import ArmExecutor
 from .episode import atomic, load
-from .evaluate_motor import Worker, action, sha256_stream
+from .evaluate_motor import Worker, issue_action, sha256_stream
 from .motor import ARM, IMAGE_SIZE, variation
 from .motor_renderer import MotorWorld
 from .motor_visual_profile import match_visual, recorded_visual
@@ -196,7 +196,7 @@ def offline_action_report(worker, dataset):
     return rows
 
 
-def learned_case(assets, worker, source, profile):
+def learned_case(assets, worker, source, profile, *, trace=None):
     meta, arrays, frames = read_teacher(source)
     match_visual(meta, worker.visual)
     world = reset_world(assets, meta)
@@ -208,14 +208,15 @@ def learned_case(assets, worker, source, profile):
         for tick in range(meta["sample_count"]):
             observed = world.state(ARM)[0]
             at_issue = world.ns
-            control = engine.submit(action(world, worker, engine))
+            control = issue_action(world, worker, engine, tick, trace)
             if tick % 15 == 14:
                 feedback.append({**observe(world, tick + 1), **control, "previous_observed_state": observed,
                                  "observed_at_ns": at_issue, "next_observed_at_ns": world.ns,
                                  "previous_applied_end_of_interval": world.arm_from_mj(world.filtered).tolist(),
                                  "teacher_applied_end_of_interval": arrays["applied_previous"][min(tick + 1, meta["sample_count"] - 1)].tolist(),
                                  "teacher_requested_at_index": arrays["requested"][tick].tolist()})
-        return {"seed": meta["seed"], "profile": profile, **summarize(feedback)}
+        return {"seed": meta["seed"], "profile": profile, **summarize(feedback),
+                **({"act_input_trace": trace.report()} if trace is not None else {})}
     finally:
         world.close()
 
