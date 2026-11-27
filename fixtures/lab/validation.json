@@ -1,0 +1,53 @@
+{
+  "scope": "Smart Swarm Homebrain Lab backend validation",
+  "optimizer_runs": [
+    {
+      "purpose": "technical native-export loader/ACT optimizer/reload connection",
+      "model": "act",
+      "dataset_source": "synthetic_test",
+      "technical_only": true,
+      "corpus_sha256": "7758fe20577373159953c7726c3c534f65e4b82581e3cc0cbb653d8d0cc12c4a",
+      "optimizer_updates": 1,
+      "sample_rows": [
+        0
+      ],
+      "checkpoint": "private local validation checkpoint",
+      "evaluation_scope": "offline native sample after checkpoint reload",
+      "offline_action_mae": 0.008597031235694885,
+      "task_outcome": "unmeasured",
+      "physical_admissions": 0,
+      "run_receipt_sha256": "fe4f94acb154ed785d6c871f1ca885a474d3268f4cfeda2d41863b849be4ede8"
+    },
+    {
+      "purpose": "technical native-export loader/ACT optimizer/reload connection",
+      "model": "act",
+      "dataset_source": "synthetic_test",
+      "technical_only": true,
+      "corpus_sha256": "7758fe20577373159953c7726c3c534f65e4b82581e3cc0cbb653d8d0cc12c4a",
+      "optimizer_updates": 1,
+      "sample_rows": [
+        0
+      ],
+      "checkpoint": "private local validation checkpoint",
+      "evaluation_scope": "offline native sample after checkpoint reload",
+      "offline_action_mae": 0.008597031235694885,
+      "task_outcome": "unmeasured",
+      "physical_admissions": 0,
+      "run_receipt_sha256": "b099572706858f2e8a85a1a48832035794342ce27e3886b08fa76ec073ca5bbe"
+    }
+  ],
+  "canonical_contract": "homebrain.lab.v1",
+  "physical_histories": 0,
+  "closed_loop_manipulations": 0,
+  "shared_compute": "Existing native Studio CPU-only reservation; sequential runs",
+  "common_ui_journey": "pending integration owner route and frontend consumption",
+  "station": "Table/floor and evaluator sightlines await attended verification",
+  "integration_peer_adapter": "passed using the actual integration owner Swarm client and native Studio/Explorer read-only services",
+  "common_http_router": {
+    "tasks": "passed",
+    "select": "passed",
+    "action": "blocked before project dispatch",
+    "error": "sqlite3.OperationalError: table operations has 9 columns but 10 values were supplied",
+    "owner_file": "homebrain/lab/journal.py:66"
+  }
+}

@@ -130,10 +130,10 @@ def corpus_record(segments, *, technical=False):
 
 
 def publish(config):
-    from .physical_story_plan import prepare
+    from .lab_cards import all_cards
 
     root = config["data_root"] / "physical-stories"
-    segments, rejected = inventory(config, root, prepare(config)["cards"])
+    segments, rejected = inventory(config, root, all_cards(config))
     record = corpus_record(segments)
     manifest = None
     if segments:

@@ -131,8 +131,9 @@ def story_progress(config):
 
 
 def card_for(config, identifier):
-    plan = prepare(config)
-    matches = [row for row in plan["cards"] if row["story_id"] == identifier]
+    from .lab_cards import all_cards
+
+    matches = [row for row in all_cards(config) if row["story_id"] == identifier]
     if not matches:
         raise ValueError("Use one of the prepared physical story IDs")
     return matches[0]

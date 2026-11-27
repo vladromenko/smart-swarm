@@ -1,0 +1,538 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:homebrain:lab:v1:smart-swarm",
+  "title": "Smart Swarm project contract",
+  "$defs": {
+    "ProjectDescriptor": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_entrypoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contract_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_revisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "task_groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "api_version",
+        "project_id",
+        "version",
+        "plugin_entrypoint",
+        "transport",
+        "schema",
+        "contract_sha256",
+        "protocol_revisions",
+        "modes",
+        "task_groups",
+        "required_capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "TaskCard": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset_intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "split": {
+          "type": "string",
+          "minLength": 1
+        },
+        "step": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "native_control_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_robots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ordered_cameras": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "setup": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "setup_media": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allowed_actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "placement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relocation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "withheld": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reset": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assistance": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "api_version",
+        "project_id",
+        "task_id",
+        "title",
+        "plan_revision",
+        "protocol_revision",
+        "dataset_intent",
+        "source_group_id",
+        "split",
+        "step",
+        "instruction",
+        "native_control_profile",
+        "validation",
+        "required_robots",
+        "ordered_cameras",
+        "setup",
+        "setup_media",
+        "allowed_actions",
+        "outcomes"
+      ],
+      "additionalProperties": false
+    },
+    "ActionRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "project_id",
+        "session_id",
+        "target_id",
+        "action",
+        "expected_revision",
+        "idempotency_key",
+        "arguments"
+      ],
+      "additionalProperties": false
+    },
+    "ActionResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "pending",
+            "unknown"
+          ]
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resulting_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "native_acknowledgement": {},
+        "receipts": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "operation_id",
+        "resulting_revision",
+        "reason",
+        "native_acknowledgement",
+        "receipts"
+      ],
+      "additionalProperties": false
+    },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "step": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allowed_actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "receipts": {
+          "type": "array"
+        },
+        "native_ids": {
+          "type": "object"
+        },
+        "pending_work": {
+          "type": "array"
+        },
+        "readiness": {
+          "type": "object"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "api_version",
+        "project_id",
+        "task_id",
+        "session_id",
+        "revision",
+        "step",
+        "instruction",
+        "attempt_id",
+        "allowed_actions",
+        "receipts",
+        "native_ids",
+        "pending_work",
+        "readiness",
+        "blockers"
+      ],
+      "additionalProperties": false
+    },
+    "Event": {
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "pending",
+            "unknown"
+          ]
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resulting_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "native_acknowledgement": {},
+        "receipts": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "sequence",
+        "status",
+        "operation_id",
+        "resulting_revision",
+        "reason",
+        "native_acknowledgement",
+        "receipts"
+      ],
+      "additionalProperties": false
+    },
+    "MarkArguments": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "enum": [
+            "insertion_closed",
+            "placement_closed",
+            "relocation_closed"
+          ]
+        },
+        "assistance": {
+          "enum": [
+            null,
+            "none",
+            "unknown",
+            "human_hand_assistance",
+            "human_relocation",
+            "attended_native_motion"
+          ]
+        },
+        "placement_outcome": {
+          "enum": [
+            null,
+            "unknown",
+            "placement_succeeded",
+            "placement_failed"
+          ]
+        },
+        "observed_change": {
+          "enum": [
+            null,
+            "unknown",
+            "confirmed",
+            "different"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "assistance"
+      ],
+      "additionalProperties": false
+    },
+    "StartArguments": {
+      "type": "object",
+      "properties": {
+        "evaluation_mode": {
+          "enum": [
+            "online",
+            "blind_offline"
+          ]
+        }
+      },
+      "required": [
+        "evaluation_mode"
+      ],
+      "additionalProperties": false
+    },
+    "RevealArguments": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "enum": [
+            "left",
+            "right",
+            "surface",
+            "held",
+            "outside",
+            "unknown",
+            "relation_unverified"
+          ]
+        },
+        "relations_preserved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "outcome",
+        "relations_preserved"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ProjectDescriptor"
+    },
+    {
+      "$ref": "#/$defs/TaskCard"
+    },
+    {
+      "$ref": "#/$defs/ActionRequest"
+    },
+    {
+      "$ref": "#/$defs/ActionResult"
+    },
+    {
+      "$ref": "#/$defs/SessionSnapshot"
+    },
+    {
+      "$ref": "#/$defs/Event"
+    }
+  ]
+}

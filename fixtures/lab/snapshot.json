@@ -1,0 +1,33 @@
+{
+  "contract_version": "homebrain.lab.v1",
+  "session_id": "station-setup",
+  "project_id": "smart-swarm",
+  "task_id": "station-setup",
+  "robot_id": "so101",
+  "domain": "physical",
+  "revision": 0,
+  "state": "attended_setup",
+  "instruction": "Check camera framing, follow the native leader and use STOP hands. Confirm only after readback.",
+  "permitted_actions": [
+    "capture_station",
+    "begin_attended_check",
+    "confirm_attended_check",
+    "readiness",
+    "submit_job",
+    "confirm_station",
+    "freeze_study"
+  ],
+  "native_ids": {},
+  "readiness": {
+    "status": "not_checked",
+    "action": "readiness"
+  },
+  "recording": {},
+  "receipts": [],
+  "pending_work": [],
+  "blockers": [],
+  "recovery": null,
+  "project_state": {
+    "task_revision_sha256": "da6243dd80af1ea685a77aed100a4ff5fc4f8d2de73a2d6230fcc18be202ad30"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "contract_version": "homebrain.lab.v1",
+  "project_id": "smart-swarm",
+  "task_id": "station-setup",
+  "title": "Verify the SO101 station",
+  "protocol_revision": "robot-platform/1.0.0",
+  "plan_revision": "station-v1",
+  "robot_id": "so101",
+  "domain": "physical",
+  "dataset_intent": "technical_setup",
+  "camera_roles": [
+    "so101-1/wrist",
+    "so101-1/top"
+  ],
+  "setup": [
+    "Place one cube and an open carrier on the table within the already calibrated SO101 reach.",
+    "Check pickup, release and final containment in wrist and top views.",
+    "For mobile stories verify that Tank and ROSMASTER can see the chosen destination and evaluator scene."
+  ],
+  "setup_media": [
+    "docs/setup/table-floor-station.svg"
+  ],
+  "control_profile": "existing Studio controls",
+  "source_group": "station-qualification",
+  "split": "development",
+  "phases": [
+    {
+      "id": "attended_setup",
+      "instruction": "Check camera framing, follow the native leader and use STOP hands. Confirm only after readback."
+    }
+  ],
+  "allowed_actions": [
+    "capture_station",
+    "begin_attended_check",
+    "confirm_attended_check",
+    "readiness",
+    "submit_job",
+    "confirm_station",
+    "freeze_study"
+  ],
+  "outcome_requirements": [
+    "verified",
+    "unverified"
+  ],
+  "eligibility": "requires_project_and_native_receipts",
+  "blockers": [],
+  "native": {
+    "validation": "New native following and calibration readback followed by a new confirmed STOP"
+  }
+}

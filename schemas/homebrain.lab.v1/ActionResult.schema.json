@@ -1,0 +1,60 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "rejected",
+        "pending",
+        "unknown"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "operation_id": {
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "revision": {
+      "title": "Revision",
+      "type": "integer"
+    },
+    "reason_code": {
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "native_acknowledgement": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Native Acknowledgement",
+      "type": "object"
+    },
+    "receipts": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Receipts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status",
+    "operation_id",
+    "revision",
+    "reason_code",
+    "message"
+  ],
+  "title": "ActionResult",
+  "type": "object"
+}

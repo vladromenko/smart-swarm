@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "scope": {
+      "title": "Scope",
+      "type": "string"
+    },
+    "attempts": {
+      "default": 0,
+      "title": "Attempts",
+      "type": "integer"
+    },
+    "saved_raw": {
+      "default": 0,
+      "title": "Saved Raw",
+      "type": "integer"
+    },
+    "technically_valid": {
+      "default": 0,
+      "title": "Technically Valid",
+      "type": "integer"
+    },
+    "admitted_story": {
+      "default": 0,
+      "title": "Admitted Story",
+      "type": "integer"
+    },
+    "successful_unassisted_motor": {
+      "default": 0,
+      "title": "Successful Unassisted Motor",
+      "type": "integer"
+    },
+    "assisted": {
+      "default": 0,
+      "title": "Assisted",
+      "type": "integer"
+    },
+    "valid_failures": {
+      "default": 0,
+      "title": "Valid Failures",
+      "type": "integer"
+    },
+    "unknown": {
+      "default": 0,
+      "title": "Unknown",
+      "type": "integer"
+    },
+    "pending": {
+      "default": 0,
+      "title": "Pending",
+      "type": "integer"
+    },
+    "incomplete": {
+      "default": 0,
+      "title": "Incomplete",
+      "type": "integer"
+    },
+    "denominators": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "default": {},
+      "title": "Denominators",
+      "type": "object"
+    },
+    "source_groups": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Source Groups",
+      "type": "object"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "Progress",
+  "type": "object"
+}
