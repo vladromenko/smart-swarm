@@ -41,5 +41,13 @@
   "closed_loop_manipulations": 0,
   "shared_compute": "Existing native Studio CPU-only reservation; sequential runs",
   "common_ui_journey": "pending integration owner route and frontend consumption",
-  "station": "Table/floor and evaluator sightlines await attended verification"
+  "station": "Table/floor and evaluator sightlines await attended verification",
+  "integration_peer_adapter": "passed using the actual integration owner Swarm client and native Studio/Explorer read-only services",
+  "common_http_router": {
+    "tasks": "passed",
+    "select": "passed",
+    "action": "blocked before project dispatch",
+    "error": "sqlite3.OperationalError: table operations has 9 columns but 10 values were supplied",
+    "owner_file": "homebrain/lab/journal.py:66"
+  }
 }

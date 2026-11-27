@@ -68,7 +68,7 @@ class HomebrainProject:
                     'action':lambda:self.action(params), 'jobs':recipes,
                     'operation':lambda:self.operation(params['identifier']),
                     'events':lambda:self.events(**params),
-                    'reconcile':lambda:self.result(self.domain.reconcile_operation(params['identifier']),params.get('target','station-setup'))}
+                    'reconcile':lambda:self.reconcile_operation(params['identifier'])}
         if name not in handlers:
             raise ValueError('Unknown project facade method')
         return handlers[name]()
@@ -77,10 +77,19 @@ class HomebrainProject:
         request = self.domain.store.request(identifier)
         return self.result(self.domain.store.operation(identifier), request['target_id'])
 
+    def reconcile_operation(self, identifier):
+        request = self.domain.store.request(identifier)
+        return self.result(self.domain.reconcile_operation(identifier), request['target_id'])
+
     def events(self, after=0, limit=50):
-        return [{'contract_version':VERSION,'sequence':raw['sequence'],'session_id':None,'kind':'project_operation',
-                 'revision':0,'created_at':raw.get('created_at',0.),'payload':raw}
-                for raw in self.domain.store.events(after,limit)]
+        return [self.event(raw) for raw in self.domain.store.events(after,limit)]
+
+    def event(self, raw):
+        request = self.domain.store.request(raw['operation_id'])
+        value = self.result(raw,request['target_id'])
+        return {'contract_version':VERSION,'sequence':raw['sequence'],'session_id':request['session_id'],
+                'kind':'project_operation','revision':value['revision'],
+                'created_at':raw['created_at'],'payload':value}
 
     def close(self):
         self.domain.close()

@@ -82,7 +82,8 @@ def native_train(corpus, output, *, model='act', technical=False, updates=1, wal
     reader = NativeTrainingData(record, split, chunk, technical=technical)
     if not len(reader):
         raise ValueError('INSUFFICIENT_DATA. No admitted native training samples')
-    if not technical and (record['source_group_count'] < 10 or not record['frames_by_split'].get('validation')):
+    from .lab_jobs import motor_eligibility
+    if not technical and not motor_eligibility(record)['eligible']:
         raise ValueError('INSUFFICIENT_DATA. Native training requires independent train and validation groups')
     output.mkdir(parents=True, exist_ok=False)
     stats = training_statistics(reader)

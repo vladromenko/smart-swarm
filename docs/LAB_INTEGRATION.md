@@ -25,3 +25,9 @@ The initial schematic illustrates a table and floor without metric geometry. Stu
 `python scripts/train_physical_motor.py --corpus CORPUS --output OUTPUT --model act --updates UPDATES --wall-seconds SECONDS` uses the existing native CPU-only reservation. Production data are tagged `hardware_recordings`; explicitly technical native fixtures are tagged `native_replay_fixture` and cannot enter the physical corpus. A one-update technical ACT fixture verified native loading, optimization, checkpoint reload and decoded offline action comparison. It has zero physical admissions or closed-loop manipulations. The two original motor checkpoints and all zero-success evaluations retain their original identities.
 
 The evidence adaptation recipe remains gated on evaluation of the first admitted native histories. Simulation evaluation requires its own declared simulation profile. Physical policy execution still requires native checkpoint qualification, attended ownership and STOP.
+
+## Integration verification on 27 November
+
+The integration owner's actual `Swarm` peer adapter connected to this plugin, correlated an asynchronous readiness action, and reopened the completed native Studio/Explorer result. Through the common HTTP router, task discovery and selection passed. The action route failed in `homebrain/lab/journal.py` before dispatch because its `operations` table has nine columns and the INSERT supplies ten values. The private handover records the exact blocker for the integration owner. A production frontend journey remains pending.
+
+The executable study allocation is checked in at `configs/physical-study-v1.json`. It contains all 368 allocated cards and their integer quotas, source groups, splits and scene instructions. The plugin persists the same allocation in the configured data directory and refuses a changed allocation on resume. Counts in that plan are targets, with zero accepted physical histories at this validation point.
