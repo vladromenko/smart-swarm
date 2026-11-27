@@ -1,0 +1,141 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "protocol_revision": {
+      "title": "Protocol Revision",
+      "type": "string"
+    },
+    "plan_revision": {
+      "title": "Plan Revision",
+      "type": "string"
+    },
+    "robot_id": {
+      "title": "Robot Id",
+      "type": "string"
+    },
+    "domain": {
+      "default": "physical",
+      "enum": [
+        "physical",
+        "simulation"
+      ],
+      "title": "Domain",
+      "type": "string"
+    },
+    "dataset_intent": {
+      "title": "Dataset Intent",
+      "type": "string"
+    },
+    "camera_roles": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Camera Roles",
+      "type": "array"
+    },
+    "setup": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Setup",
+      "type": "array"
+    },
+    "setup_media": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Setup Media",
+      "type": "array"
+    },
+    "control_profile": {
+      "title": "Control Profile",
+      "type": "string"
+    },
+    "source_group": {
+      "title": "Source Group",
+      "type": "string"
+    },
+    "split": {
+      "title": "Split",
+      "type": "string"
+    },
+    "phases": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Phases",
+      "type": "array"
+    },
+    "allowed_actions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Actions",
+      "type": "array"
+    },
+    "outcome_requirements": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Outcome Requirements",
+      "type": "array"
+    },
+    "eligibility": {
+      "default": "unknown",
+      "title": "Eligibility",
+      "type": "string"
+    },
+    "blockers": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Blockers",
+      "type": "array"
+    },
+    "native": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Native",
+      "type": "object"
+    }
+  },
+  "required": [
+    "task_id",
+    "project_id",
+    "title",
+    "protocol_revision",
+    "plan_revision",
+    "robot_id",
+    "dataset_intent",
+    "control_profile",
+    "source_group",
+    "split"
+  ],
+  "title": "TaskCard",
+  "type": "object"
+}

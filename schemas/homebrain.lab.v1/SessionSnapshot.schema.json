@@ -1,0 +1,130 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "robot_id": {
+      "title": "Robot Id",
+      "type": "string"
+    },
+    "domain": {
+      "enum": [
+        "physical",
+        "simulation"
+      ],
+      "title": "Domain",
+      "type": "string"
+    },
+    "revision": {
+      "default": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "state": {
+      "default": "selected",
+      "title": "State",
+      "type": "string"
+    },
+    "instruction": {
+      "title": "Instruction",
+      "type": "string"
+    },
+    "permitted_actions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Permitted Actions",
+      "type": "array"
+    },
+    "native_ids": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "title": "Native Ids",
+      "type": "object"
+    },
+    "readiness": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Readiness",
+      "type": "object"
+    },
+    "recording": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Recording",
+      "type": "object"
+    },
+    "receipts": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Receipts",
+      "type": "array"
+    },
+    "pending_work": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Pending Work",
+      "type": "array"
+    },
+    "blockers": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Blockers",
+      "type": "array"
+    },
+    "recovery": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recovery"
+    },
+    "project_state": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Project State",
+      "type": "object"
+    }
+  },
+  "required": [
+    "session_id",
+    "project_id",
+    "task_id",
+    "robot_id",
+    "domain",
+    "instruction"
+  ],
+  "title": "SessionSnapshot",
+  "type": "object"
+}

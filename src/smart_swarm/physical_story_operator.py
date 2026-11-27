@@ -6,6 +6,7 @@ import time
 from .episode import load
 from .native_fleet_start import START_GATE, START_RECEIPT, valid_start_receipt
 from .physical_learned import DEFERRED
+from .lab_domain import MIN_RELOCATION_S, relocation_readiness
 from .physical_story_condition import CARRIER_MOVE, RELOCATION_CHECKS, REMOVAL
 from .physical_story_motor import review_pending_motor
 from .physical_story_plan import prepare
@@ -17,9 +18,6 @@ from .physical_story_source import (ACTIVE_STORY_STATES, FLEET_TERMINAL, SETTLED
 
 class StoryDeckComplete(ValueError):
     """Every prepared card already has a saved attempt."""
-
-
-MIN_RELOCATION_S = 15
 
 
 def next_story(config, *, preview=False):
@@ -131,7 +129,7 @@ def wait_stationary_lead_in(config, state):
     hold = ceil(STATIONARY_LEAD_IN_S - age())
     if hold > 0:
         print(f"Explorer acknowledged recording. Keep the scene still for {hold} seconds.", flush=True)
-    proof = lambda: age() >= STATIONARY_LEAD_IN_S and archived_rgb_started(config, state)
+    proof = lambda: relocation_readiness(state, time.monotonic_ns(), archived_rgb_started(config, state))["ready"]
     if state.get("fleet_rgb_start_gate"):
         print("Waiting for recorded RGB from both native streams before relocation.", flush=True)
     while age() < state["fleet_window_s"] - MIN_RELOCATION_S and not proof() and is_capturing(config, state):

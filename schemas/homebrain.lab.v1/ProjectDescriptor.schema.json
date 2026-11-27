@@ -1,0 +1,79 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "protocol_revision": {
+      "title": "Protocol Revision",
+      "type": "string"
+    },
+    "modes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Modes",
+      "type": "array"
+    },
+    "robot_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Robot Ids",
+      "type": "array"
+    },
+    "task_groups": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Task Groups",
+      "type": "array"
+    },
+    "plugin_location": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Plugin Location"
+    },
+    "capabilities": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id",
+    "title",
+    "version",
+    "protocol_revision",
+    "modes",
+    "robot_ids"
+  ],
+  "title": "ProjectDescriptor",
+  "type": "object"
+}

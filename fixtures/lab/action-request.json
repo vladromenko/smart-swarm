@@ -1,0 +1,10 @@
+{
+  "contract_version": "homebrain.lab.v1",
+  "project_id": "smart-swarm",
+  "session_id": "station-setup",
+  "target_id": "station-setup",
+  "action": "readiness",
+  "arguments": {},
+  "expected_revision": 0,
+  "idempotency_key": "fixture-readiness-1"
+}

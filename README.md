@@ -41,3 +41,12 @@ The independent simulation uses 100 source worlds and reports seven methods at t
 - [Reuse and model assets](docs/REUSE_MAP.md)
 - [Operator guide](docs/OPERATOR_GUIDE.md)
 - [Experiment descriptor template](experiment.example.json)
+
+## Homebrain Lab project integration
+
+The noninteractive project plugin exposes task cards, durable actions, progress, native save/recovery and the physical study allocation to the common Homebrain Lab workspace. The typed facade and its current integration limits are documented in the integration guide. The operator setup guide is also available in Russian.
+
+- [Project facade and native training bridge](docs/LAB_INTEGRATION.md)
+- [Russian operator guide](docs/LAB_OPERATOR_RU.md)
+- [Canonical contract schemas](schemas/homebrain.lab.v1)
+- [Validation evidence](fixtures/lab/validation.json)

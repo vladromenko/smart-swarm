@@ -1,0 +1,68 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "action": {
+      "pattern": "^[a-z][a-z0-9_]{1,47}$",
+      "title": "Action",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Id"
+    },
+    "target_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Id"
+    },
+    "expected_revision": {
+      "minimum": 0,
+      "title": "Expected Revision",
+      "type": "integer"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 8,
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "arguments": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  "required": [
+    "action",
+    "project_id",
+    "expected_revision",
+    "idempotency_key"
+  ],
+  "title": "ActionRequest",
+  "type": "object"
+}

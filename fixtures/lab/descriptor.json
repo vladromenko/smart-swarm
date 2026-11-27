@@ -1,0 +1,48 @@
+{
+  "contract_version": "homebrain.lab.v1",
+  "project_id": "smart-swarm",
+  "title": "Smart Swarm",
+  "version": "0.2.0",
+  "protocol_revision": "smart-swarm-physical-study-v1",
+  "modes": [
+    "hardware",
+    "mujoco",
+    "replay",
+    "fixture"
+  ],
+  "robot_ids": [
+    "so101",
+    "tank",
+    "rosmaster"
+  ],
+  "task_groups": [
+    {
+      "id": "station_setup",
+      "title": "station setup"
+    },
+    {
+      "id": "component_pilot",
+      "title": "component pilot"
+    },
+    {
+      "id": "development",
+      "title": "development"
+    },
+    {
+      "id": "study",
+      "title": "study"
+    },
+    {
+      "id": "paired_control",
+      "title": "paired control"
+    }
+  ],
+  "plugin_location": "smart_swarm.lab_api:HomebrainProject",
+  "capabilities": [
+    "studio.record",
+    "studio.control",
+    "studio.stop",
+    "explorer.capture",
+    "compute.reserve"
+  ]
+}

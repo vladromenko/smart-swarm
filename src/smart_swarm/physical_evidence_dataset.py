@@ -138,7 +138,7 @@ def verify_terminal(root, journal, manifest):
 def check_link(journal, manifest, card):
     if (journal["card"] != card or manifest["world_episode_id"] != card["story_id"]
             or manifest["scene_group_id"] != card["source_group_id"]
-            or not manifest["lineage"]["split"] == card["split"] == "development"):
+            or manifest["lineage"]["split"] != card["split"] or card["split"] not in ("development","train","validation","test")):
         raise ValueError("The sealed story identity or development split differs from its original card")
     capture = journal["fleet_capture_id"]
     if (manifest["run_mode"] != "hardware" or manifest["source_type"] != "native_hardware"
@@ -240,9 +240,11 @@ def describe(records):
 
 
 def publish(config):
+    from .lab_cards import all_cards
     plan = prepare(config)
     root = config["data_root"] / "physical-stories"
-    records, disallowed = inventory(config, root, plan["cards"])
+    cards = all_cards(config)
+    records, disallowed = inventory(config, root, cards)
     data = describe(records)
     data["plan_sha256"] = sha(Path(plan["plan_path"]))
     path = None
@@ -255,7 +257,7 @@ def publish(config):
             atomic(path, data)
         if sha(path) != digest:
             raise ValueError("Immutable physical corpus content no longer matches its file identity")
-    return {**data, "manifest": str(path) if path else None, "planned": len(plan["cards"]),
+    return {**data, "manifest": str(path) if path else None, "planned": len(cards),
             "attempted": len(records) + len(disallowed), "exclusions": disallowed,
             "exclusion_counts": dict(Counter(row["status"] for row in disallowed))}
 

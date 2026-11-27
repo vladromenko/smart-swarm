@@ -1,0 +1,52 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "default": "homebrain.lab.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "sequence": {
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Session Id"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "revision": {
+      "title": "Revision",
+      "type": "integer"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "number"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    }
+  },
+  "required": [
+    "sequence",
+    "session_id",
+    "kind",
+    "revision",
+    "created_at",
+    "payload"
+  ],
+  "title": "LabEvent",
+  "type": "object"
+}
